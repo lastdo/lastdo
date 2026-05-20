@@ -37,7 +37,7 @@ st.set_page_config(page_title="外資籌碼重壓選股器", page_icon="🏦", l
 import sys
 from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).parent.parent))
-from _style import apply_style, page_header
+from _style import apply_style, page_header, render_global_navigation
 apply_style()
 page_header("🏦", "外資籌碼重壓選股器", "策略：外資籌碼重壓 ｜ 上市＋上櫃 ｜ 近N日外資累積買超為主篩條件")
 
@@ -45,6 +45,8 @@ page_header("🏦", "外資籌碼重壓選股器", "策略：外資籌碼重壓 
 # 側邊欄
 # ─────────────────────────────────────────────
 with st.sidebar:
+    render_global_navigation("chip_screener")
+    st.markdown("---")
     st.header("⚙️ 選股條件")
     st.divider()
 

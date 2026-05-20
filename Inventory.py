@@ -12,8 +12,20 @@ import json
 import requests
 import streamlit as st
 from pathlib import Path
+from datetime import datetime, timedelta
+
+import pandas as pd
+import plotly.express as px
+
+import sys
+from pathlib import Path as _Path
+
+sys.path.insert(0, str(_Path(__file__).parent))
+from _style import render_global_navigation
 
 FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
+BROKER_FEE_RATE = 0.001425
+STOCK_SELL_TAX_RATE = 0.003
 
 @st.cache_data(ttl=3600)
 def fetch_all_stock_names() -> dict:
@@ -25,6 +37,45 @@ def fetch_all_stock_names() -> dict:
     except Exception:
         pass
     return {}
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_recent_stock_price(symbol: str) -> dict:
+    end_date = datetime.today().date()
+    start_date = end_date - timedelta(days=21)
+    params = {
+        "dataset": "TaiwanStockPrice",
+        "data_id": symbol,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+    }
+    try:
+        resp = requests.get(FINMIND_URL, params=params, timeout=15)
+        resp.raise_for_status()
+        result = resp.json()
+        if result.get("status") != 200 or not result.get("data"):
+            return {}
+
+        df = pd.DataFrame(result["data"])
+        if df.empty or "close" not in df.columns:
+            return {}
+        df["date"] = pd.to_datetime(df["date"])
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        df = df.dropna(subset=["close"]).sort_values("date")
+        if df.empty:
+            return {}
+
+        latest = df.iloc[-1]
+        previous = df.iloc[-2] if len(df) >= 2 else None
+        latest_price = float(latest["close"])
+        previous_price = float(previous["close"]) if previous is not None else None
+        return {
+            "latest_price": latest_price,
+            "previous_price": previous_price,
+            "price_date": latest["date"].strftime("%Y-%m-%d"),
+        }
+    except Exception:
+        return {}
 
 PORTFOLIO_FILE = Path(__file__).parent / "portfolio.json"
 
@@ -69,10 +120,25 @@ st.markdown("""
 .stat-card.c-blue   { border-color: #2563eb; }
 .stat-card.c-green  { border-color: #16a34a; }
 .stat-card.c-purple { border-color: #7c3aed; }
+.stat-card.c-red    { border-color: #dc2626; }
+.stat-card.c-amber  { border-color: #d97706; }
+.stat-card.c-slate  { border-color: #475569; }
 .stat-label { color: #64748b; font-size: 0.75rem; font-weight: 700;
               text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 8px; }
 .stat-value { color: #0f172a; font-size: 1.7rem; font-weight: 800; }
 .stat-sub   { color: #94a3b8; font-size: 0.78rem; margin-top: 4px; }
+.stat-value.pos { color: #dc2626; }
+.stat-value.neg { color: #16a34a; }
+
+.status-badge {
+    display: inline-block;
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 0.72rem;
+    font-weight: 800;
+}
+.status-badge.holding { background: #fee2e2; color: #b91c1c; }
+.status-badge.watch { background: #e0f2fe; color: #0369a1; }
 
 /* ── 新增表單標題 ── */
 .form-section-title {
@@ -200,6 +266,7 @@ div[data-testid="stForm"] {
 /* ── 隱藏預設 Streamlit 頁尾 ── */
 #MainMenu, footer { visibility: hidden; }
 div[data-testid="stDecoration"] { display: none; }
+div[data-testid="stSidebarNav"] { display: none; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -216,30 +283,126 @@ def save_portfolio(portfolio: list) -> None:
         json.dump(portfolio, f, ensure_ascii=False, indent=2)
 
 
-def render_entry_navigation() -> None:
-    """Keep Inventory.py as the main entry and restore access to all tools."""
-    with st.sidebar:
-        st.header("功能導覽")
-        st.caption("這裡是主入口，可直接切換到分析、歷史與各種選股頁。")
+def _to_float(value):
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
-        if st.button("📊 AI 台股分析", use_container_width=True, type="primary"):
-            st.switch_page("pages/1_app_tw.py")
-        if st.button("🕘 分析歷史", use_container_width=True):
-            st.switch_page("pages/2_analysis_history.py")
-        if st.button("📈 成長股篩選", use_container_width=True):
-            st.switch_page("pages/3_growth_screener.py")
-        if st.button("🏦 外資籌碼重壓", use_container_width=True):
-            st.switch_page("pages/4_chip_screener.py")
-        if st.button("🌱 底部剛起漲", use_container_width=True):
-            st.switch_page("pages/5_bottom_screener.py")
 
-        st.markdown("---")
-        st.caption("目前頁面：💼 庫存股管理")
+def _to_int(value):
+    try:
+        if value in (None, ""):
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def format_money(value, digits: int = 0) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    return f"NT$ {value:,.{digits}f}"
+
+
+def format_pct(value) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    return f"{value:+.2f}%"
+
+
+def pnl_class(value) -> str:
+    if value is None or pd.isna(value) or value == 0:
+        return ""
+    return "pos" if value > 0 else "neg"
+
+
+def estimate_fee(amount, rate: float) -> int | None:
+    if amount is None or pd.isna(amount):
+        return None
+    return int(amount * rate)
+
+
+def build_portfolio_rows(portfolio: list, stock_names: dict) -> pd.DataFrame:
+    rows = []
+    for stock in portfolio:
+        symbol = str(stock.get("symbol", "")).strip()
+        cost_price = _to_float(stock.get("price"))
+        shares = _to_int(stock.get("shares"))
+        is_holding = bool(cost_price and shares and cost_price > 0 and shares > 0)
+        price_info = fetch_recent_stock_price(symbol) if symbol else {}
+        latest_price = price_info.get("latest_price")
+        previous_price = price_info.get("previous_price")
+
+        invested_cost = cost_price * shares if is_holding else None
+        market_value = latest_price * shares if is_holding and latest_price is not None else None
+        gross_unrealized_pnl = (
+            market_value - invested_cost
+            if market_value is not None and invested_cost is not None
+            else None
+        )
+        sell_fee = estimate_fee(market_value, BROKER_FEE_RATE)
+        sell_tax = estimate_fee(market_value, STOCK_SELL_TAX_RATE)
+        exit_cost = (
+            sell_fee + sell_tax
+            if sell_fee is not None and sell_tax is not None
+            else None
+        )
+        unrealized_pnl = (
+            gross_unrealized_pnl - exit_cost
+            if gross_unrealized_pnl is not None and exit_cost is not None
+            else gross_unrealized_pnl
+        )
+        unrealized_return = (
+            unrealized_pnl / invested_cost * 100
+            if unrealized_pnl is not None and invested_cost
+            else None
+        )
+        today_pnl = (
+            (latest_price - previous_price) * shares
+            if is_holding and latest_price is not None and previous_price is not None
+            else None
+        )
+
+        rows.append({
+            "symbol": symbol,
+            "name": stock_names.get(symbol, ""),
+            "type": "持股" if is_holding else "自選股",
+            "cost_price": cost_price,
+            "shares": shares,
+            "latest_price": latest_price,
+            "previous_price": previous_price,
+            "price_date": price_info.get("price_date", ""),
+            "invested_cost": invested_cost,
+            "market_value": market_value,
+            "sell_fee": sell_fee,
+            "sell_tax": sell_tax,
+            "exit_cost": exit_cost,
+            "gross_unrealized_pnl": gross_unrealized_pnl,
+            "unrealized_pnl": unrealized_pnl,
+            "unrealized_return": unrealized_return,
+            "today_pnl": today_pnl,
+        })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+
+    total_market = df["market_value"].dropna().sum()
+    df["position_ratio"] = df["market_value"].apply(
+        lambda value: value / total_market * 100
+        if total_market and value is not None and not pd.isna(value)
+        else None
+    )
+    return df
 
 
 portfolio = load_portfolio()
 stock_names = fetch_all_stock_names()
-render_entry_navigation()
+with st.sidebar:
+    render_global_navigation("inventory")
 
 # ── 頁首橫幅 ─────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -252,40 +415,55 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ── 統計摘要 ──────────────────────────────────────────────────────────────────
-total_stocks = len(portfolio)
-priced = [s for s in portfolio if s.get("price") and s.get("shares")]
-total_cost   = sum(s["price"] * s["shares"] for s in priced)
-total_shares = sum(s["shares"] for s in priced)
+# ── 投組摘要 ──────────────────────────────────────────────────────────────────
+with st.spinner("正在更新庫存股市值與損益..."):
+    portfolio_df = build_portfolio_rows(portfolio, stock_names)
 
-c1, c2, c3 = st.columns(3)
-with c1:
-    st.markdown(f"""
-    <div class="stat-card c-blue">
-        <div class="stat-label">持股檔數</div>
-        <div class="stat-value">{total_stocks}</div>
-        <div class="stat-sub">檔股票在追蹤中</div>
-    </div>""", unsafe_allow_html=True)
-with c2:
-    cost_str = f"NT$ {total_cost:,.0f}" if total_cost else "—"
-    sub_str  = f"共 {len(priced)} 檔有填入成本" if priced else "尚未填入持有成本"
-    st.markdown(f"""
-    <div class="stat-card c-green">
-        <div class="stat-label">持股總成本</div>
-        <div class="stat-value" style="font-size:1.35rem;">{cost_str}</div>
-        <div class="stat-sub">{sub_str}</div>
-    </div>""", unsafe_allow_html=True)
-with c3:
-    shares_str = f"{total_shares:,} 股" if total_shares else "—"
-    st.markdown(f"""
-    <div class="stat-card c-purple">
-        <div class="stat-label">持有股數合計</div>
-        <div class="stat-value" style="font-size:1.35rem;">{shares_str}</div>
-        <div class="stat-sub">{'約 {:,.1f} 張'.format(total_shares/1000) if total_shares else '尚未填入股數'}</div>
-    </div>""", unsafe_allow_html=True)
+if portfolio_df.empty:
+    holding_df = pd.DataFrame()
+    watch_df = pd.DataFrame()
+else:
+    holding_df = portfolio_df[portfolio_df["type"] == "持股"].copy()
+    watch_df = portfolio_df[portfolio_df["type"] == "自選股"].copy()
+
+total_cost = holding_df["invested_cost"].dropna().sum() if not holding_df.empty else 0
+total_market = holding_df["market_value"].dropna().sum() if not holding_df.empty else 0
+unrealized_pnl = (
+    holding_df["unrealized_pnl"].dropna().sum()
+    if not holding_df.empty and holding_df["unrealized_pnl"].notna().any()
+    else None
+)
+unrealized_return = unrealized_pnl / total_cost * 100 if unrealized_pnl is not None and total_cost else None
+today_pnl = (
+    holding_df["today_pnl"].dropna().sum()
+    if not holding_df.empty and holding_df["today_pnl"].notna().any()
+    else None
+)
+priced_holding_count = int(holding_df["market_value"].notna().sum()) if not holding_df.empty else 0
+
+total_exit_cost = holding_df["exit_cost"].dropna().sum() if not holding_df.empty else 0
+
+summary_cards = [
+    ("總投入成本", format_money(total_cost), f"{len(holding_df)} 檔持股", "c-green", ""),
+    ("目前總市值", format_money(total_market), f"{priced_holding_count} 檔已取得最新收盤價", "c-blue", ""),
+    ("未實現損益", format_money(unrealized_pnl), f"已扣預估賣出費稅 {format_money(total_exit_cost)}", "c-red" if (unrealized_pnl or 0) >= 0 else "c-green", pnl_class(unrealized_pnl)),
+    ("未實現報酬率", format_pct(unrealized_return), "淨損益 / 總投入成本", "c-purple", pnl_class(unrealized_return)),
+    ("今日損益", format_money(today_pnl), "最新收盤價 - 前一交易日收盤價", "c-amber", pnl_class(today_pnl)),
+]
+
+for row in [summary_cards[:3], summary_cards[3:]]:
+    cols = st.columns(len(row))
+    for col, (label, value, sub, color, value_class) in zip(cols, row):
+        with col:
+            st.markdown(f"""
+            <div class="stat-card {color}">
+                <div class="stat-label">{label}</div>
+                <div class="stat-value {value_class}" style="font-size:1.35rem;">{value}</div>
+                <div class="stat-sub">{sub}</div>
+            </div>""", unsafe_allow_html=True)
 
 # ── 新增持股表單 ───────────────────────────────────────────────────────────────
-st.markdown('<div class="form-section-title">新增持股</div>', unsafe_allow_html=True)
+st.markdown('<div class="form-section-title">新增自選股 / 持股</div>', unsafe_allow_html=True)
 
 with st.form("add_stock_form", clear_on_submit=True):
     col1, col2, col3, col4 = st.columns([2, 2, 2, 1.2])
@@ -297,7 +475,7 @@ with st.form("add_stock_form", clear_on_submit=True):
         new_shares = st.text_input("持有股數（選填）", placeholder="例：1000")
     with col4:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        submitted = st.form_submit_button("＋ 新增持股", use_container_width=True, type="primary")
+        submitted = st.form_submit_button("＋ 新增", use_container_width=True, type="primary")
 
 if submitted:
     new_symbol = new_symbol.strip()
@@ -316,74 +494,156 @@ if submitted:
             shares_val = int(new_shares.strip()) if new_shares.strip() else None
         except ValueError:
             shares_val = None
-        portfolio.append({"symbol": new_symbol, "price": price_val, "shares": shares_val})
+        new_item = {"symbol": new_symbol, "price": price_val, "shares": shares_val}
+        portfolio.append(new_item)
         save_portfolio(portfolio)
-        st.success(f"✅ 已新增「{new_symbol}」{stock_names.get(new_symbol, '')} 至庫存清單")
+        item_type = "持股" if price_val and shares_val else "自選股"
+        st.success(f"✅ 已新增「{new_symbol}」{stock_names.get(new_symbol, '')} 至{item_type}清單")
         st.rerun()
 
-# ── 庫存清單 ──────────────────────────────────────────────────────────────────
+# ── 個股持倉比例 ───────────────────────────────────────────────────────────────
 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
+if not holding_df.empty and holding_df["market_value"].notna().any():
+    st.markdown('<div class="form-section-title">個股持倉比例</div>', unsafe_allow_html=True)
+    chart_df = holding_df.dropna(subset=["market_value"]).copy()
+    chart_df["label"] = chart_df["symbol"] + " " + chart_df["name"].fillna("")
+    chart_df = chart_df.sort_values("position_ratio", ascending=True)
+    chart_df["ratio_label"] = chart_df["position_ratio"].map(lambda x: f"{x:.1f}%")
+    fig = px.bar(
+        chart_df,
+        x="position_ratio",
+        y="label",
+        orientation="h",
+        text="ratio_label",
+        color="unrealized_pnl",
+        color_continuous_scale=["#16a34a", "#f8fafc", "#dc2626"],
+        labels={"position_ratio": "持倉比例 (%)", "label": "股票", "unrealized_pnl": "未實現損益"},
+        height=max(260, 48 * len(chart_df) + 90),
+    )
+    fig.update_traces(textposition="outside", cliponaxis=False)
+    fig.update_layout(
+        margin=dict(l=10, r=60, t=24, b=10),
+        plot_bgcolor="#ffffff",
+        paper_bgcolor="#ffffff",
+        coloraxis_showscale=False,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+# ── 自選股 / 持股清單 ─────────────────────────────────────────────────────────
 if not portfolio:
     st.markdown("""
     <div class="empty-state">
         <div class="es-icon">📭</div>
         <h3>庫存清單是空的</h3>
-        <p>在上方輸入股票代碼，按「新增持股」開始建立您的追蹤清單</p>
+        <p>在上方輸入股票代碼，按「新增」開始建立自選股或持股清單</p>
     </div>""", unsafe_allow_html=True)
 else:
+    st.markdown('<div class="form-section-title">持股清單</div>', unsafe_allow_html=True)
     st.markdown(f"""
     <div class="list-header">
-        <span>庫存清單</span>
-        <span class="lh-count">{len(portfolio)} 檔</span>
+        <span>持股清單</span>
+        <span class="lh-count">{len(holding_df)} 檔</span>
     </div>""", unsafe_allow_html=True)
 
-    # 欄標題列
-    h0, h1, h2, h3, h4, h5 = st.columns([0.3, 1.6, 2.2, 1.8, 1.8, 2.5])
+    if holding_df.empty:
+        st.info("目前沒有填入成本與股數的持股；只有股票代碼會歸在下方自選股。")
+    else:
+        display_holding_df = holding_df.copy()
+        display_holding_df = display_holding_df.sort_values("market_value", ascending=False, na_position="last")
+        display_holding_df["股票"] = display_holding_df["symbol"] + " " + display_holding_df["name"].fillna("")
+        display_holding_df["持有成本"] = display_holding_df["cost_price"].map(lambda x: format_money(x, 2))
+        display_holding_df["股數"] = display_holding_df["shares"].map(lambda x: f"{int(x):,} 股" if pd.notna(x) else "—")
+        display_holding_df["最新價"] = display_holding_df["latest_price"].map(lambda x: format_money(x, 2))
+        display_holding_df["投入成本"] = display_holding_df["invested_cost"].map(format_money)
+        display_holding_df["目前市值"] = display_holding_df["market_value"].map(format_money)
+        display_holding_df["毛損益"] = display_holding_df["gross_unrealized_pnl"].map(format_money)
+        display_holding_df["賣出手續費"] = display_holding_df["sell_fee"].map(format_money)
+        display_holding_df["交易稅"] = display_holding_df["sell_tax"].map(format_money)
+        display_holding_df["未實現損益"] = display_holding_df["unrealized_pnl"].map(format_money)
+        display_holding_df["未實現報酬率"] = display_holding_df["unrealized_return"].map(format_pct)
+        display_holding_df["今日損益"] = display_holding_df["today_pnl"].map(format_money)
+        display_holding_df["持倉比例"] = display_holding_df["position_ratio"].map(
+            lambda x: f"{x:.2f}%" if pd.notna(x) else "—"
+        )
+        display_holding_df["價格日"] = display_holding_df["price_date"].replace("", "—")
+        st.dataframe(
+            display_holding_df[
+                [
+                    "股票",
+                    "持有成本",
+                    "股數",
+                    "最新價",
+                    "投入成本",
+                    "目前市值",
+                    "毛損益",
+                    "賣出手續費",
+                    "交易稅",
+                    "未實現損益",
+                    "未實現報酬率",
+                    "今日損益",
+                    "持倉比例",
+                    "價格日",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.markdown('<div class="form-section-title">自選股清單</div>', unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="list-header">
+        <span>自選股清單</span>
+        <span class="lh-count">{len(watch_df)} 檔</span>
+    </div>""", unsafe_allow_html=True)
+
+    if watch_df.empty:
+        st.info("目前沒有自選股；新增股票時不填成本與股數，就會放到自選股清單。")
+    else:
+        watch_display = watch_df.copy()
+        watch_display["股票"] = watch_display["symbol"] + " " + watch_display["name"].fillna("")
+        watch_display["最新價"] = watch_display["latest_price"].map(lambda x: format_money(x, 2))
+        watch_display["前收"] = watch_display["previous_price"].map(lambda x: format_money(x, 2))
+        watch_display["價格日"] = watch_display["price_date"].replace("", "—")
+        st.dataframe(
+            watch_display[["股票", "最新價", "前收", "價格日"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.markdown('<div class="form-section-title">操作</div>', unsafe_allow_html=True)
+    h0, h1, h2, h3, h4 = st.columns([0.4, 1.4, 2.2, 1.2, 2.2])
     h0.markdown('<div class="col-hdr">#</div>', unsafe_allow_html=True)
     h1.markdown('<div class="col-hdr">代碼</div>', unsafe_allow_html=True)
     h2.markdown('<div class="col-hdr">股票名稱</div>', unsafe_allow_html=True)
-    h3.markdown('<div class="col-hdr">持有成本</div>', unsafe_allow_html=True)
-    h4.markdown('<div class="col-hdr">持有股數</div>', unsafe_allow_html=True)
-    h5.markdown('<div class="col-hdr">操作</div>', unsafe_allow_html=True)
+    h3.markdown('<div class="col-hdr">類型</div>', unsafe_allow_html=True)
+    h4.markdown('<div class="col-hdr">操作</div>', unsafe_allow_html=True)
 
     for i, stock in enumerate(portfolio):
-        name   = stock_names.get(stock["symbol"], "")
-        price  = stock.get("price")
-        shares = stock.get("shares")
+        symbol = str(stock.get("symbol", ""))
+        matched = portfolio_df[portfolio_df["symbol"] == symbol]
+        item_type = matched.iloc[0]["type"] if not matched.empty else "自選股"
+        name = stock_names.get(symbol, "")
 
-        c0, c1, c2, c3, c4, c5 = st.columns([0.3, 1.6, 2.2, 1.8, 1.8, 2.5])
-
+        c0, c1, c2, c3, c4 = st.columns([0.4, 1.4, 2.2, 1.2, 2.2])
         with c0:
             st.markdown(f"<div style='color:#cbd5e1;font-size:0.8rem;padding-top:10px;text-align:center'>{i+1}</div>", unsafe_allow_html=True)
-
         with c1:
-            st.markdown(f"<div style='padding-top:6px'><span class='sym-badge'>{stock['symbol']}</span></div>", unsafe_allow_html=True)
-
+            st.markdown(f"<div style='padding-top:6px'><span class='sym-badge'>{symbol}</span></div>", unsafe_allow_html=True)
         with c2:
             _name_html = name if name else "<span style='color:#cbd5e1'>—</span>"
             st.markdown(f"<div class='stock-name-text' style='padding-top:10px'>{_name_html}</div>", unsafe_allow_html=True)
-
         with c3:
-            if price is not None:
-                st.markdown(f"<div style='padding-top:8px'><div class='val-main'>NT$ {price:,.2f}</div><div class='val-label'>每股成本</div></div>", unsafe_allow_html=True)
-            else:
-                st.markdown("<div style='padding-top:10px;color:#cbd5e1;font-size:0.9rem'>—</div>", unsafe_allow_html=True)
-
+            badge_class = "holding" if item_type == "持股" else "watch"
+            st.markdown(f"<div style='padding-top:10px'><span class='status-badge {badge_class}'>{item_type}</span></div>", unsafe_allow_html=True)
         with c4:
-            if shares is not None:
-                st.markdown(f"<div style='padding-top:8px'><div class='val-main'>{shares:,} 股</div><div class='val-label'>約 {shares/1000:.1f} 張</div></div>", unsafe_allow_html=True)
-            else:
-                st.markdown("<div style='padding-top:10px;color:#cbd5e1;font-size:0.9rem'>—</div>", unsafe_allow_html=True)
-
-        with c5:
             btn_col1, btn_col2 = st.columns([3, 1])
             with btn_col1:
-                if st.button(f"📈 AI 分析", key=f"analyze_{i}", use_container_width=True, type="primary"):
-                    st.session_state["selected_symbol"] = stock["symbol"]
+                if st.button("📈 AI 分析", key=f"analyze_{i}", use_container_width=True, type="primary"):
+                    st.session_state["selected_symbol"] = symbol
                     st.switch_page("pages/1_app_tw.py")
             with btn_col2:
-                if st.button("🗑️", key=f"del_{i}", help=f"移除 {stock['symbol']}"):
+                if st.button("🗑️", key=f"del_{i}", help=f"移除 {symbol}"):
                     removed = portfolio.pop(i)
                     save_portfolio(portfolio)
                     st.toast(f"✅ 已移除「{removed['symbol']}」")
