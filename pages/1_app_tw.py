@@ -37,7 +37,7 @@ st.set_page_config(
 import sys
 from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).parent.parent))
-from _style import apply_style, page_header
+from _style import apply_style, page_header, render_global_navigation
 apply_style()
 page_header("📈", "AI 台股趨勢分析系統", "技術面分析 · AI 智慧報告 · 籌碼面觀察")
 
@@ -46,6 +46,8 @@ page_header("📈", "AI 台股趨勢分析系統", "技術面分析 · AI 智慧
 # F-001 側邊欄控制區
 # ─────────────────────────────────────────────
 with st.sidebar:
+    render_global_navigation("app_tw")
+    st.markdown("---")
     st.header("📊 分析設定")
     st.divider()
 

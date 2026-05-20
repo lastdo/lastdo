@@ -40,7 +40,7 @@ import sys
 from pathlib import Path as _Path
 
 sys.path.insert(0, str(_Path(__file__).parent.parent))
-from _style import apply_style, page_header
+from _style import apply_style, page_header, render_global_navigation
 
 apply_style()
 page_header("📈", "底部剛起漲選股器", "策略：近半年低點支撐 ｜ 漲幅未明顯 ｜ 營收年增為正")
@@ -49,6 +49,8 @@ page_header("📈", "底部剛起漲選股器", "策略：近半年低點支撐 
 # 側邊欄
 # ─────────────────────────────────────────────
 with st.sidebar:
+    render_global_navigation("bottom_screener")
+    st.markdown("---")
     st.header("⚙️ 選股條件")
     st.divider()
 

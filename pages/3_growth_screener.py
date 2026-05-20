@@ -38,7 +38,7 @@ st.set_page_config(page_title="成長股篩選", page_icon="📈", layout="wide"
 import sys
 from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).parent.parent))
-from _style import apply_style, page_header
+from _style import apply_style, page_header, render_global_navigation
 apply_style()
 page_header("📈", "成長股篩選", "從營收成長、成交量、股價與去年全年 EPS 找出合理本益比的成長股。")
 
@@ -46,6 +46,8 @@ page_header("📈", "成長股篩選", "從營收成長、成交量、股價與�
 # 側邊欄條件
 # ------------------------------
 with st.sidebar:
+    render_global_navigation("growth_screener")
+    st.markdown("---")
     st.header("篩選條件")
     st.divider()
 

@@ -22,7 +22,7 @@ st.set_page_config(
 import sys
 from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).parent.parent))
-from _style import apply_style, page_header
+from _style import apply_style, page_header, render_global_navigation
 apply_style()
 page_header("📂", "分析記錄", "儲存自 AI 台股趨勢分析系統的技術面資料（CSV）與 AI 報告（Markdown）")
 
@@ -45,6 +45,8 @@ if not all_files:
 
 # ── 側邊篩選 ──────────────────────────────────────
 with st.sidebar:
+    render_global_navigation("analysis_history")
+    st.markdown("---")
     st.header("🔍 篩選")
     st.divider()
 
