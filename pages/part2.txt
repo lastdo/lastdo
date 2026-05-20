@@ -1,0 +1,537 @@
+        return df2
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_tpex_3insti(date_roc: str) -> pd.DataFrame:
+    """?¥è©¢ TPEX ä¸‰å¤§æ³•äºº?‹è‚¡è²·è³£è¶…ï?ä½¿ç”¨?‡å??¥æ??„æ­·??URLï¼Œä???OpenAPI ä»¥ç¢ºä¿å??°æ­£ç¢ºæ—¥?Ÿè??™ï?"""
+    url = (f"https://www.tpex.org.tw/web/stock/3insti/daily_trade/"
+           f"3itrade_hedge_result.php?l=zh-tw&se=EW&t=D&d={date_roc}&s=0,asc&o=json")
+    try:
+        resp = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        j = resp.json()
+        tables = j.get("tables", [])
+        if not tables or not tables[0].get("data"):
+            return pd.DataFrame()
+        header = tables[0].get("title", [])
+        df = pd.DataFrame(tables[0]["data"])
+        col_f  = next((i for i, h in enumerate(header) if "ä¸å«å¤–è??ªç??? in str(h)), None)
+        col_fd = next((i for i, h in enumerate(header) if "å¤–è??ªç??? in str(h) and "ä¸å«" not in str(h)), None)
+        if col_f is None:
+            col_f = 4
+        net = pd.to_numeric(df[col_f].astype(str).str.replace(",", ""), errors="coerce").fillna(0)
+        if col_fd is not None:
+            net = net + pd.to_numeric(df[col_fd].astype(str).str.replace(",", ""), errors="coerce").fillna(0)
+        df2 = pd.DataFrame({"stock_id": df[0].astype(str).str.strip(), "foreign_net_shares": net})
+        return df2
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_public_pe_ratios() -> pd.DataFrame:
+    """?¥è©¢ TWSE/TPEX å®˜æ–¹?¬ç?æ¯”ï??¨æ–¼ FinMind ?ç?å¯¬é??ç¯©??""
+    frames = []
+
+    try:
+        raw_twse = fetch_json_twse(URL_TWSE_PE)
+        df_twse = pd.DataFrame(raw_twse)[["Code", "PEratio"]].rename(
+            columns={"Code": "stock_id", "PEratio": "pe_ratio_public"}
+        )
+        frames.append(df_twse)
+    except Exception:
+        pass
+
+    try:
+        raw_tpex = fetch_json_tpex(URL_TPEX_PE)
+        df_tpex = pd.DataFrame(raw_tpex)[["SecuritiesCompanyCode", "PriceEarningRatio"]].rename(
+            columns={"SecuritiesCompanyCode": "stock_id", "PriceEarningRatio": "pe_ratio_public"}
+        )
+        frames.append(df_tpex)
+    except Exception:
+        pass
+
+    if not frames:
+        return pd.DataFrame(columns=["stock_id", "pe_ratio_public"])
+
+    df = pd.concat(frames, ignore_index=True)
+    df["stock_id"] = df["stock_id"].astype(str).str.strip()
+    df["pe_ratio_public"] = (
+        df["pe_ratio_public"].astype(str).str.replace(",", "", regex=False).str.strip()
+    )
+    df["pe_ratio_public"] = pd.to_numeric(df["pe_ratio_public"], errors="coerce")
+    df.loc[df["pe_ratio_public"] <= 0, "pe_ratio_public"] = pd.NA
+    return df.drop_duplicates("stock_id")
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_finmind_eps(symbol: str, token: str) -> pd.DataFrame:
+    """?¥è©¢?®ä??¡ç¥¨å­£EPSï¼ˆå¿«??0?†é?ï¼?""
+    start_year = datetime.today().year - 3
+    params = {
+        "dataset": "TaiwanStockFinancialStatements",
+        "data_id": symbol,
+        "start_date": f"{start_year}-01-01",
+        "end_date": datetime.today().strftime("%Y-%m-%d"),
+        "token": token,
+    }
+    try:
+        time.sleep(2.2)
+        resp = requests.get(FINMIND_URL, params=params, timeout=20)
+        result = resp.json()
+        status = result.get("status")
+        msg = str(result.get("msg") or result.get("message") or result.get("error") or "")
+        status_code = int(status) if str(status).isdigit() else status
+        if status_code in (402, 403, 429) or "ban" in msg.lower() or "rate" in msg.lower():
+            raise RuntimeError(f"FINMIND_BANNED:{result.get('retry_after', '?')}:{msg}")
+        if status_code != 200 or not result.get("data"):
+            raise RuntimeError(f"FINMIND_ERROR:{status}:{msg}")
+        df = pd.DataFrame(result["data"])
+        df = df[df["type"] == "EPS"].copy()
+        if df.empty:
+            return pd.DataFrame()
+        df["date"] = pd.to_datetime(df["date"])
+        df["eps"]  = pd.to_numeric(df["value"], errors="coerce")
+        return df[["date", "eps"]].sort_values("date").reset_index(drop=True)
+    except RuntimeError:
+        raise
+    except Exception:
+        return pd.DataFrame()
+
+
+def parse_finmind_retry_seconds(error_msg: str):
+    """å¾?FINMIND_BANNED:retry_after:message ?–å‡º retry_after ç§’æ•¸??""
+    parts = str(error_msg).split(":", 2)
+    if len(parts) < 2:
+        return None
+    try:
+        retry_seconds = int(float(parts[1]))
+    except Exception:
+        return None
+    return max(retry_seconds, 0)
+
+
+def format_wait_time(seconds):
+    if seconds is None:
+        return "?ªçŸ¥"
+    minutes, sec = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"{hours} å°æ? {minutes} ??{sec} ç§?
+    if minutes > 0:
+        return f"{minutes} ??{sec} ç§?
+    return f"{sec} ç§?
+
+
+def format_retry_at(seconds):
+    if seconds is None:
+        return "?ªçŸ¥"
+    retry_at = datetime.now() + timedelta(seconds=int(seconds))
+    return retry_at.strftime("%H:%M:%S")
+
+
+def calc_forward_pe(close_price: float, eps_q: pd.DataFrame):
+    """?¨ä¼°?¨å¹´EPSç®—æ?è¨ˆç??¬ç?æ¯”ï???1_app_tw.pyï¼?""
+    if eps_q is None or eps_q.empty:
+        return None, "EPSè³‡æ?ä¸è¶³"
+    q = eps_q.copy()
+    q["year"]  = q["date"].dt.year
+    q["month"] = q["date"].dt.month
+    latest_year   = int(q["year"].max())
+    latest_year_q = q[q["year"] == latest_year].sort_values("date")
+    num_q_latest  = len(latest_year_q)
+    prev_year     = latest_year - 1
+    prev_year_q   = q[q["year"] == prev_year].sort_values("date")
+    latest_months  = set(latest_year_q["month"].tolist())
+    remaining_prev = prev_year_q[~prev_year_q["month"].isin(latest_months)]
+    forward_eps = 0.0
+    for _, r in latest_year_q.iterrows():
+        forward_eps += float(r["eps"])
+    for _, r in remaining_prev.iterrows():
+        forward_eps += float(r["eps"])
+    if forward_eps <= 0:
+        return None, f"?¨ä¼°EPS={forward_eps:.2f}ï¼ˆè™§?ï?"
+    pe = close_price / forward_eps
+    if num_q_latest >= 4:
+        label = f"{latest_year}å¹´å…¨å¹?
+    else:
+        rem_start = num_q_latest + 1
+        cur_part  = f"{latest_year}Q1" if num_q_latest == 1 else f"{latest_year}Q1-Q{num_q_latest}"
+        prev_part = f"{prev_year}Q{rem_start}" if rem_start == 4 else f"{prev_year}Q{rem_start}-Q4"
+        label = f"{cur_part}+{prev_part}"
+    return pe, label
+
+
+# ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+# Step 1ï¼šæ??–è‚¡?¹ï??è²» APIï¼?
+# ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+progress = st.progress(0, text="?? æº–å?ä¸?..")
+
+progress.progress(5, text="?? ?–å?ä¸Šå??¡åƒ¹ï¼ˆTWSEï¼?..")
+try:
+    raw_twse_price = fetch_json_twse(URL_TWSE_PRICE)
+except Exception as e:
+    st.error(f"??ä¸Šå??¡åƒ¹ API å¤±æ?ï¼š{e}"); st.stop()
+
+progress.progress(12, text="?? ?–å?ä¸Šæ??¡åƒ¹ï¼ˆTPEXï¼?..")
+try:
+    raw_tpex_price = fetch_json_tpex(URL_TPEX_PRICE)
+except Exception as e:
+    st.error(f"??ä¸Šæ??¡åƒ¹ API å¤±æ?ï¼š{e}"); st.stop()
+
+progress.progress(20, text="?’° ?–å?ä¸Šå??ˆç??¶ï?TWSEï¼?..")
+try:
+    raw_twse_rev = fetch_json_twse(URL_TWSE_REV)
+except Exception as e:
+    st.error(f"??ä¸Šå??ˆç???API å¤±æ?ï¼š{e}"); st.stop()
+
+progress.progress(30, text="?’° ?–å?ä¸Šæ??ˆç??¶ï?TPEXï¼?..")
+try:
+    raw_tpex_rev = fetch_json_tpex(URL_TPEX_REV)
+except Exception as e:
+    st.error(f"??ä¸Šæ??ˆç???API å¤±æ?ï¼š{e}"); st.stop()
+
+progress.progress(38, text="?”§ ?´ç??¡åƒ¹?‡æ??Ÿæ”¶è³‡æ?...")
+
+# ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+# Step 2ï¼šæ•´?†è‚¡??
+# ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+df_twse_p = pd.DataFrame(raw_twse_price)[["Code", "Name", "ClosingPrice", "TradeVolume"]].copy()
+df_twse_p = df_twse_p.rename(columns={
+    "Code": "stock_id", "Name": "stock_name",
+    "ClosingPrice": "close", "TradeVolume": "vol_shares",
+})
+df_twse_p["market"] = "ä¸Šå?"
+
+df_tpex_p = pd.DataFrame(raw_tpex_price)[["SecuritiesCompanyCode", "CompanyName", "Close", "TradingShares"]].copy()
+df_tpex_p = df_tpex_p.rename(columns={
+    "SecuritiesCompanyCode": "stock_id", "CompanyName": "stock_name",
+    "Close": "close", "TradingShares": "vol_shares",
+})
+df_tpex_p["market"] = "ä¸Šæ?"
+
+df_price = pd.concat([df_twse_p, df_tpex_p], ignore_index=True)
+df_price["close"]      = pd.to_numeric(df_price["close"],      errors="coerce")
+df_price["vol_shares"] = pd.to_numeric(df_price["vol_shares"], errors="coerce")
+df_price["vol_lot"]    = df_price["vol_shares"] / 1000
+df_price["stock_id"]   = df_price["stock_id"].astype(str).str.strip()
+df_price = df_price[["stock_id", "stock_name", "market", "close", "vol_lot"]].dropna()
+
+# å¥—ç”¨?¡åƒ¹ç¯©é¸
+df_price_filtered = df_price[df_price["close"] > price_min].copy().reset_index(drop=True)
+
+# ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+# Step 3ï¼šæ•´?†æ??Ÿæ”¶ï¼ˆå–®?ˆï?
+# ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+rev_col_map = {
+    "?¬å¸ä»??":               "stock_id",
+    "è³‡æ?å¹´æ?":               "rev_ym",
+    "?Ÿæ¥­?¶å…¥-?¶æ??Ÿæ”¶":      "rev_cur",
+    "?Ÿæ¥­?¶å…¥-?»å¹´?¶æ??Ÿæ”¶":  "rev_ly",
+    "?Ÿæ¥­?¶å…¥-?»å¹´?Œæ?å¢æ?(%)": "rev_yoy",
+}
+df_twse_r = pd.DataFrame(raw_twse_rev).rename(columns=rev_col_map)[list(rev_col_map.values())].copy()
+df_tpex_r = pd.DataFrame(raw_tpex_rev).rename(columns=rev_col_map)[list(rev_col_map.values())].copy()
+
+df_rev = pd.concat([df_twse_r, df_tpex_r], ignore_index=True)
+df_rev["rev_yoy"] = pd.to_numeric(df_rev["rev_yoy"], errors="coerce")
+df_rev["rev_cur"] = pd.to_numeric(df_rev["rev_cur"], errors="coerce")
+df_rev["rev_ly"]  = pd.to_numeric(df_rev["rev_ly"],  errors="coerce")
+df_rev["stock_id"] = df_rev["stock_id"].astype(str).str.strip()
+df_rev = df_rev.dropna(subset=["rev_yoy"])
+
+# ?–æ??°å–®??
+df_rev_latest = (
+    df_rev.sort_values(["stock_id", "rev_ym"], ascending=[True, False])
+    .groupby("stock_id", as_index=False)
+    .first()
+)
+
+# ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+# Step 4ï¼šå?ä½?& å¥—ç”¨?¡åƒ¹ + ?®æ??Ÿæ”¶å¹´å??‡æ?ä»?
+# ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+df_merged = df_price_filtered.merge(
+    df_rev_latest[["stock_id", "rev_ym", "rev_yoy", "rev_cur", "rev_ly"]],
+    on="stock_id", how="inner"
+)
+df_candidates = df_merged[
+    df_merged["rev_yoy"] > rev_growth_min
+].copy().reset_index(drop=True)
+
+n_candidates = len(df_candidates)
+progress.progress(45, text=f"?? ?¡åƒ¹+?ˆç??¶é€šé? {n_candidates} æª”ï??¥è©¢å¤–è????è³??...")
+
+if n_candidates == 0:
+    progress.progress(100, text="??å®Œæ?")
+    st.warning("? ï? æ²’æ??¡ç¥¨?šé??¡åƒ¹/?ˆç??¶æ?ä»¶ï?è«‹æ”¾å¯¬è¨­å®šã€?)
+    st.stop()
+
+# ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+# Step 5ï¼šå?è¿‘æ?å¤–è?è²·è³£è¶…ï?è¨ˆç????è³??å¤©æ•¸
+# ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+_need_days = abs(consec_sell_min)
+MAX_FETCH  = _need_days + 20   # å¤šå? 20 å¤©ç·©è¡ä»¥?²é€??
+
+progress.progress(50, text=f"?¦ ?–å?å¤–è?ä¸‰å¤§æ³•äººè³‡æ?ï¼ˆæ?è¿?{MAX_FETCH} ?‹äº¤?“æ—¥ï¼?..")
+
+# stock_id -> list[float]ï¼Œæ??‹å?ç´ ç‚º?¶æ—¥å¤–è?æ·¨è²·è³??ï¼ˆè‚¡ï¼‰ï??€?°åœ¨??
+_stock_daily: dict = {}
+_valid_dates: list = []
+
+for _i in range(MAX_FETCH + 30):
+    _d = datetime.today().date() - timedelta(days=_i + 1)
+    if _d.weekday() >= 5:   # è·³é??±å…­??
+        continue
+    _date_ymd = _d.strftime("%Y%m%d")
+    _date_roc = f"{_d.year - 1911}/{_d.month:02d}/{_d.day:02d}"
+
+    _df_tw = fetch_twse_3insti(_date_ymd)
+    _df_tp = fetch_tpex_3insti(_date_roc)
+
+    if _df_tw.empty and _df_tp.empty:
+        continue   # ?‡æ—¥?¡è??™ï?è·³é?
+
+    _df_day = pd.concat([_df_tw, _df_tp], ignore_index=True)
+    _df_day = _df_day.groupby("stock_id", as_index=False)["foreign_net_shares"].sum()
+
+    for _sid, _net in zip(_df_day["stock_id"].tolist(), _df_day["foreign_net_shares"].tolist()):
+        if _sid not in _stock_daily:
+            _stock_daily[_sid] = []
+        _stock_daily[_sid].append(float(_net))
+
+    _valid_dates.append(_d)
+    if len(_valid_dates) >= MAX_FETCH:
+        break
+
+if not _valid_dates:
+    progress.progress(100, text="??å®Œæ?")
+    st.error("???¡æ??–å? TWSE/TPEX ä¸‰å¤§æ³•äººè³‡æ?ï¼Œè?ç¨å??è©¦??)
+    st.stop()
+
+
+def calc_consec_sell_days(stock_id: str) -> int:
+    """å¾æ??°äº¤?“æ—¥å¾€?ï?è¨ˆç?å¤–è????è³??ï¼ˆæ·¨è²·è³£è¶?< 0ï¼‰å¤©?¸ï??å‚³è² æ•¸ï¼ˆå? -10ï¼?""
+    entries = _stock_daily.get(stock_id, [])
+    count = 0
+    for net in entries:   # entries[0] = ?€?°æ—¥
+        if net < 0:
+            count += 1
+        else:
+            break   # ?‡åˆ°?è³£è¶…æ—¥ï¼Œé€??ä¸²ç???
+    return -count   # ???è³?? 10 å¤???-10
+
+
+_inst_date0 = _valid_dates[-1].strftime("%Y-%m-%d") if _valid_dates else "-"
+_inst_date1 = _valid_dates[0].strftime("%Y-%m-%d")  if _valid_dates else "-"
+
+progress.progress(65, text=f"?”§ è¨ˆç????è³??å¤©æ•¸ï¼ˆ{_inst_date0} ~ {_inst_date1}ï¼Œ{len(_valid_dates)} ?‹äº¤?“æ—¥ï¼?..")
+
+df_candidates["consec_sell_days"] = df_candidates["stock_id"].apply(calc_consec_sell_days)
+
+df_sell_filtered = df_candidates[
+    df_candidates["consec_sell_days"] <= consec_sell_min
+].copy().reset_index(drop=True)
+
+n_sell = len(df_sell_filtered)
+progress.progress(75, text=f"?¦ å¤–è????è³?? ??{consec_sell_min} å¤©é€šé? {n_sell} æª”ï??¥è©¢å­£EPS...")
+
+if n_sell == 0:
+    progress.progress(100, text="??å®Œæ?")
+    df_top = df_candidates.sort_values("consec_sell_days", ascending=True).head(20)
+    st.warning(
+        f"? ï? ?¡åƒ¹+?ˆç??¶æ?ä»¶é€šé? {n_candidates} æª”ï?"
+        f"ä½†å?è³‡é€??è³?? ??{consec_sell_min} å¤©å??¡ç¬¦?ˆï?è«‹èª¿?´æ?ä»¶ã€?
+    )
+    if not df_top.empty:
+        st.caption("ä»¥ä??ºé€??è³??å¤©æ•¸?€å¤šç???20 æª”ï?ä¾›å??ƒï?ï¼?)
+        st.dataframe(
+            df_top[["stock_id", "stock_name", "market", "close", "rev_yoy", "consec_sell_days"]].rename(
+                columns={"stock_id": "?¡ç¥¨ä»?¢¼", "stock_name": "?¡ç¥¨?ç¨±", "market": "å¸‚å ´",
+                         "close": "?¶ç›¤????", "rev_yoy": "?®æ??Ÿæ”¶å¹´å???%)",
+                         "consec_sell_days": "å¤–è????è³??(å¤?"}),
+            use_container_width=True, hide_index=True,
+        )
+    st.stop()
+
+# ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+# Step 6ï¼šæŸ¥è©?FinMind å­£EPSï¼Œè?ç®—æ¨ä¼°æœ¬?Šæ?
+# ?ˆç”¨å®˜æ–¹?¬ç?æ¯”å¯¬é¬†é?ç¯©ï??æŸ¥ FinMindï¼Œé¿?è§¸??rate limit
+# ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+progress.progress(78, text="?? ?–å?å®˜æ–¹?¬ç?æ¯”ï?ç¸®å? FinMind ?¥è©¢ç¯„å?...")
+
+df_public_pe = fetch_public_pe_ratios()
+df_sell_filtered = df_sell_filtered.merge(df_public_pe, on="stock_id", how="left")
+
+PE_PREFILTER_MAX = pe_max * 1.5
+df_eps_targets = df_sell_filtered[
+    df_sell_filtered["pe_ratio_public"].isna()
+    | (df_sell_filtered["pe_ratio_public"] <= PE_PREFILTER_MAX)
+].copy()
+
+if df_eps_targets.empty:
+    progress.progress(100, text="??å®Œæ?")
+    st.warning(
+        f"? ï? å¤–è????è³??æ¢ä»¶?šé? {n_sell} æª”ï?ä½†å??¹æœ¬?Šæ?å¯¬é??ç¯©ï¼ˆâ‰¤ {PE_PREFILTER_MAX:.1f} ?ï?å¾Œç„¡?™é¸?¡ã€?
+    )
+    st.stop()
+
+df_eps_targets["_pe_sort"] = df_eps_targets["pe_ratio_public"].fillna(pe_max)
+df_eps_targets = df_eps_targets.sort_values(
+    ["_pe_sort", "consec_sell_days"], ascending=[True, True]
+).drop(columns=["_pe_sort"]).reset_index(drop=True)
+
+MAX_FINMIND = 30
+if len(df_eps_targets) > MAX_FINMIND:
+    st.info(
+        f"?¹ï? å¤–è????è³??æ¢ä»¶?šé? {n_sell} æª”ï?å®˜æ–¹?¬ç?æ¯”å¯¬é¬†é?ç¯©å???{len(df_eps_targets)} æª”ï?"
+        f"?ºé¿??FinMind API è¶…é?ï¼Œå„ª?ˆæŸ¥è©¢æ??¯èƒ½ç¬¦å??¬ç?æ¯”æ?ä»¶ç???{MAX_FINMIND} æª”ã€?
+    )
+    df_eps_targets = df_eps_targets.head(MAX_FINMIND).reset_index(drop=True)
+
+n_eps_targets = len(df_eps_targets)
+eps_bar = st.progress(0, text=f"?? ?¥è©¢ FinMind å­£EPSï¼? / {n_eps_targets} æª”ï??®ç?ç¨‹ç?æµï?...")
+
+results = []
+_banned_msg = ""
+
+for done_count, (_, row) in enumerate(df_eps_targets.iterrows(), start=1):
+    sid = row["stock_id"]
+    try:
+        eps_q = get_finmind_eps(sid, finmind_token)
+        pe, pe_label = calc_forward_pe(float(row["close"]), eps_q)
+        results.append({"stock_id": sid, "pe_ratio": pe, "pe_label": pe_label})
+    except RuntimeError as e:
+        err = str(e)
+        if "FINMIND_BANNED" in err:
+            _banned_msg = err
+            break
+        results.append({"stock_id": sid, "pe_ratio": None, "pe_label": "FinMind?¥è©¢å¤±æ?"})
+    except Exception:
+        results.append({"stock_id": sid, "pe_ratio": None, "pe_label": "FinMind?¥è©¢å¤±æ?"})
+
+    eps_bar.progress(
+        min(done_count / n_eps_targets, 1.0),
+        text=f"?? ?¥è©¢ FinMind å­£EPSï¼ˆ{done_count} / {n_eps_targets} æª”å??ï?",
+    )
+
+if _banned_msg and not results:
+    _retry_seconds = parse_finmind_retry_seconds(_banned_msg)
+    _wait_text = format_wait_time(_retry_seconds)
+    _retry_at = format_retry_at(_retry_seconds)
+    eps_bar.progress(1.0, text="??FinMind IP å°é?")
+    st.error(
+        f"??FinMind API ?å‚³ **IP ?«æ?å°é?**ï¼ˆip bannedï¼‰\n\n"
+        f"?©é?ç­‰å??‚é?ï¼šç? **{_wait_text}**\n\n"
+        f"?ä¼°?¯é??°æŸ¥è©¢æ??“ï?**{_retry_at}**\n\n"
+        f"?Ÿå?ï¼šçŸ­?‚é??§å‘¼?«æ¬¡?¸é?å¤šï?è¶…é? FinMind ?è²»é¡åº¦?Ÿç??åˆ¶??
+    )
+    st.stop()
+
+if _banned_msg and results:
+    n_success = len(results)
+    _retry_seconds = parse_finmind_retry_seconds(_banned_msg)
+    _wait_text = format_wait_time(_retry_seconds)
+    _retry_at = format_retry_at(_retry_seconds)
+    st.warning(
+        f"? ï? FinMind API ä¸­é€”è¢« rate limitï¼Œå?å®Œæ? {n_success} / {n_eps_targets} æª”ç? EPS ?¥è©¢ï¼Œç??œå¯?½ä?å®Œæ•´??
+        f"?©é?ç­‰å??‚é?ï¼šç? **{_wait_text}**ï¼›é?ä¼°å¯?æ–°?¥è©¢?‚é?ï¼?*{_retry_at}**??
+    )
+
+eps_bar.progress(1.0, text="??å­£EPS?¥è©¢å®Œæ?")
+
+df_pe  = pd.DataFrame(results)
+df_all = df_sell_filtered.merge(df_pe, on="stock_id", how="left")
+
+# å¥—ç”¨?¬ç?æ¯”æ?ä»?
+df_result = df_all[
+    df_all["pe_ratio"].notna() & (df_all["pe_ratio"] < pe_max)
+].copy().reset_index(drop=True)
+
+progress.progress(100, text="???¸è‚¡å®Œæ?ï¼?)
+
+# å­˜å…¥ session_state
+st.session_state["bottom_screener_result"] = df_result
+
+# ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+# é¡¯ç¤ºçµæ?
+# ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+count = len(df_result)
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("ç¬¦å?æ¢ä»¶",       f"{count} æª?)
+col2.metric("?¬ç?æ¯?,         f"< {pe_max:.0f} ??)
+col3.metric("?¡åƒ¹",           f"> {price_min:.0f} ??)
+col4.metric("å¤–è????è³??",   f"??{consec_sell_min} å¤?)
+
+st.divider()
+
+if count == 0:
+    st.warning(
+        f"? ï? å¤–è????è³??æ¢ä»¶?šé? {n_sell} æª”ï?ä½†å?ä¸Šæœ¬?Šæ?æ¢ä»¶ï¼? {pe_max:.0f} ?ï?å¾Œç„¡ç¬¦å?ï¼Œè??¾å¯¬ PE æ¢ä»¶??
+    )
+    df_no_pe = df_all[df_all["pe_ratio"].notna()].sort_values("pe_ratio")
+    if not df_no_pe.empty:
+        st.caption("ä»¥ä??ºé€šé????è³??æ¢ä»¶ä½†æœ¬?Šæ?ä¸ç¬¦?„è‚¡ç¥¨ï?ä¾›å??ƒï?ï¼?)
+        st.dataframe(
+            df_no_pe[["stock_id", "stock_name", "market", "close", "pe_ratio", "consec_sell_days"]].head(20),
+            use_container_width=True, hide_index=True,
+        )
+    st.stop()
+
+st.subheader(f"?? ?„å??å–®ï¼ˆå…± {count} æª”ï?ä»¥å?è³‡é€??è³??å¤©æ•¸?‡å†ª?’å?ï¼?)
+
+try:
+    _price_date_raw = raw_twse_price[0].get("Date", "")
+    if len(_price_date_raw) == 7:
+        _py, _pm, _pd = int(_price_date_raw[:3]) + 1911, _price_date_raw[3:5], _price_date_raw[5:7]
+        _date_str = f"{_py}/{_pm}/{_pd}"
+    else:
+        _date_str = _price_date_raw
+    st.caption(
+        f"?? ?¡åƒ¹/?ˆç??¶è??™æ—¥?Ÿï?{_date_str}ï¼ˆTWSE ?€è¿‘äº¤?“æ—¥ï¼?
+        f"ï½œå?è³‡è²·è³??çµ±è?ï¼š{_inst_date0} ~ {_inst_date1}ï¼ˆæ?è¿?{abs(consec_sell_min)} å¤©ä»¥ä¸Šå¤©?¸ç??ï?"
+    )
+except Exception:
+    pass
+
+display_df = df_result.rename(columns={
+    "stock_id":         "?¡ç¥¨ä»?¢¼",
+    "stock_name":       "?¡ç¥¨?ç¨±",
+    "market":           "å¸‚å ´",
+    "close":            "?¶ç›¤????",
+    "rev_yoy":          "?®æ??Ÿæ”¶å¹´å???%)",
+    "rev_ym":           "?€?°ç??¶å¹´??,
+    "consec_sell_days": "å¤–è????è³??(å¤?",
+    "pe_ratio":         "?¬ç?æ¯???",
+    "pe_label":         "?¨ä¼°EPS?ºç?",
+})[["?¡ç¥¨ä»?¢¼", "?¡ç¥¨?ç¨±", "å¸‚å ´", "?¶ç›¤????", "?¬ç?æ¯???", "?¨ä¼°EPS?ºç?",
+    "?®æ??Ÿæ”¶å¹´å???%)", "?€?°ç??¶å¹´??, "å¤–è????è³??(å¤?"]]
+
+display_df["?¶ç›¤????"]        = display_df["?¶ç›¤????"].round(2)
+display_df["?¬ç?æ¯???"]        = pd.to_numeric(display_df["?¬ç?æ¯???"], errors="coerce").round(2)
+display_df["?®æ??Ÿæ”¶å¹´å???%)"] = pd.to_numeric(display_df["?®æ??Ÿæ”¶å¹´å???%)"], errors="coerce").round(2)
+display_df = display_df.sort_values("å¤–è????è³??(å¤?", ascending=True).reset_index(drop=True)
+
+st.dataframe(
+    display_df,
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "?¡ç¥¨ä»?¢¼":           st.column_config.TextColumn("?¡ç¥¨ä»?¢¼",           width="small"),
+        "?¡ç¥¨?ç¨±":           st.column_config.TextColumn("?¡ç¥¨?ç¨±",           width="medium"),
+        "å¸‚å ´":               st.column_config.TextColumn("å¸‚å ´",               width="small"),
+        "?¶ç›¤????":         st.column_config.NumberColumn("?¶ç›¤????",        format="%.2f"),
+        "?¬ç?æ¯???":         st.column_config.NumberColumn("?¬ç?æ¯???",        format="%.2f"),
+        "?¨ä¼°EPS?ºç?":        st.column_config.TextColumn("?¨ä¼°EPS?ºç?",        width="medium"),
+        "?®æ??Ÿæ”¶å¹´å???%)":  st.column_config.NumberColumn("?®æ??Ÿæ”¶å¹´å???%)", format="%.2f"),
+        "?€?°ç??¶å¹´??:       st.column_config.TextColumn("?€?°ç??¶å¹´??,        width="small"),
+        "å¤–è????è³??(å¤?":   st.column_config.NumberColumn("å¤–è????è³??(å¤?",  format="%d"),
+    },
+)
+
+csv = display_df.to_csv(index=False, encoding="cp950", errors="replace")
+st.download_button(
+    "â¬‡ï? ä¸‹è? CSVï¼ˆExcel ?¯ç›´?¥é??Ÿï?", csv,
+    f"?„å??¸è‚¡_{datetime.today().strftime('%Y%m%d')}.csv", "text/csv",
+)
