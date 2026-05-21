@@ -220,6 +220,7 @@ def render_global_navigation(current_page: str) -> None:
         ("growth_screener", "📈 成長股篩選", "pages/3_growth_screener.py"),
         ("chip_screener", "🏦 外資籌碼重壓", "pages/4_chip_screener.py"),
         ("bottom_screener", "🌱 底部剛起漲", "pages/5_bottom_screener.py"),
+        ("trade_review", "AI 進出場分析", "pages/6_trade_review.py"),
     ]
 
     labels = {
@@ -229,6 +230,7 @@ def render_global_navigation(current_page: str) -> None:
         "growth_screener": "📈 成長股篩選",
         "chip_screener": "🏦 外資籌碼重壓",
         "bottom_screener": "🌱 底部剛起漲",
+        "trade_review": "AI 進出場分析",
     }
 
     st.header("功能導覽")
