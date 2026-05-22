@@ -1,15 +1,3 @@
-import logging
-
-
-class _IgnoreBareMode(logging.Filter):
-    def filter(self, record):
-        return "missing ScriptRunContext" not in record.getMessage()
-
-
-logging.getLogger(
-    "streamlit.runtime.scriptrunner_utils.script_run_context"
-).addFilter(_IgnoreBareMode())
-
 import os
 import time
 import threading
@@ -27,16 +15,15 @@ load_dotenv()
 # ─────────────────────────────────────────────
 URL_TWSE_PRICE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
-FINMIND_URL    = "https://api.finmindtrade.com/api/v4/data"
+from _app_common import FINMIND_URL
+from _export_utils import dataframe_to_csv_bytes
+from _page_bootstrap import ROOT_DIR
 
 # ─────────────────────────────────────────────
 # 頁面設定
 # ─────────────────────────────────────────────
 st.set_page_config(page_title="外資籌碼重壓選股器", page_icon="🏦", layout="wide")
 
-import sys
-from pathlib import Path as _Path
-sys.path.insert(0, str(_Path(__file__).parent.parent))
 from _style import apply_style, page_header, render_global_navigation
 apply_style()
 page_header("🏦", "外資籌碼重壓選股器", "策略：外資籌碼重壓 ｜ 上市＋上櫃 ｜ 近N日外資累積買超為主篩條件")
@@ -109,7 +96,7 @@ if not run_btn:
         _disp["當日成交量(張)"]    = _disp["當日成交量(張)"].round(0).astype(int)
         _disp = _disp.sort_values("收盤價(元)", ascending=False).reset_index(drop=True)
         st.dataframe(_disp, use_container_width=True, hide_index=True)
-        _csv = _disp.to_csv(index=False, encoding="cp950", errors="replace")
+        _csv = dataframe_to_csv_bytes(_disp)
         st.download_button(
             "⬇️ 下載 CSV（Excel 可直接開啟）", _csv,
             f"外資籌碼重壓_{datetime.today().strftime('%Y%m%d')}.csv", "text/csv",
@@ -612,7 +599,7 @@ st.dataframe(
     },
 )
 
-csv_bytes = display_df.to_csv(index=False, encoding="cp950", errors="replace")
+csv_bytes = dataframe_to_csv_bytes(display_df)
 st.download_button(
     label="⬇️ 下載 CSV（Excel 可直接開啟）",
     data=csv_bytes,

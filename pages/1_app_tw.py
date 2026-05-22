@@ -1,16 +1,4 @@
-import logging
 from pathlib import Path
-
-ANALYSIS_DIR = Path(__file__).parent.parent / "analysis"
-ANALYSIS_DIR.mkdir(exist_ok=True)
-
-class _IgnoreBareMode(logging.Filter):
-    def filter(self, record):
-        return "missing ScriptRunContext" not in record.getMessage()
-
-logging.getLogger(
-    "streamlit.runtime.scriptrunner_utils.script_run_context"
-).addFilter(_IgnoreBareMode())
 
 import os
 import streamlit as st
@@ -22,6 +10,10 @@ from groq import Groq
 import json
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from _app_common import ensure_analysis_dir
+from _export_utils import CSV_ENCODING, dataframe_to_csv_bytes
+
+ANALYSIS_DIR = ensure_analysis_dir()
 
 load_dotenv()  # 從 .env 自動載入環境變數
 
@@ -34,9 +26,6 @@ st.set_page_config(
     layout="wide",
 )
 
-import sys
-from pathlib import Path as _Path
-sys.path.insert(0, str(_Path(__file__).parent.parent))
 from _style import apply_style, page_header, render_global_navigation
 apply_style()
 page_header("📈", "AI 台股趨勢分析系統", "技術面分析 · AI 智慧報告 · 籌碼面觀察")
@@ -1327,7 +1316,7 @@ if "_cache" in st.session_state:
         else:
             merged_export = export_df
 
-        csv_bytes = merged_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        csv_bytes = dataframe_to_csv_bytes(merged_export)
         dl_col, save_col = st.columns(2)
         with dl_col:
             st.download_button(
@@ -1340,7 +1329,7 @@ if "_cache" in st.session_state:
         with save_col:
             if st.button("💾 儲存技術面資料到分析記錄", use_container_width=True):
                 save_path = ANALYSIS_DIR / f"{symbol_input}_{stock_name}_{start_date}_{end_date}_技術面.csv"
-                merged_export.to_csv(save_path, index=False, encoding="utf-8-sig")
+                merged_export.to_csv(save_path, index=False, encoding=CSV_ENCODING)
                 st.success(f"✅ 已儲存到 analysis/{save_path.name}")
 
     # ────────────────────────────────────────────

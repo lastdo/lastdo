@@ -1,29 +1,16 @@
-import logging
-
-class _IgnoreBareMode(logging.Filter):
-    def filter(self, record):
-        return "missing ScriptRunContext" not in record.getMessage()
-
-logging.getLogger(
-    "streamlit.runtime.scriptrunner_utils.script_run_context"
-).addFilter(_IgnoreBareMode())
-
 import json
 import requests
 import streamlit as st
-from pathlib import Path
 from datetime import datetime, timedelta
 
 import pandas as pd
 import plotly.express as px
 
-import sys
-from pathlib import Path as _Path
-
-sys.path.insert(0, str(_Path(__file__).parent))
+from _app_common import FINMIND_URL, configure_runtime, get_portfolio_file
 from _style import render_global_navigation
 
-FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
+configure_runtime()
+
 BROKER_FEE_RATE = 0.001425
 STOCK_SELL_TAX_RATE = 0.003
 
@@ -77,7 +64,7 @@ def fetch_recent_stock_price(symbol: str) -> dict:
     except Exception:
         return {}
 
-PORTFOLIO_FILE = Path(__file__).parent / "portfolio.json"
+PORTFOLIO_FILE = get_portfolio_file()
 
 st.set_page_config(page_title="庫存股管理", page_icon="💼", layout="wide")
 

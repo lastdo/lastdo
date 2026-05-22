@@ -1,21 +1,10 @@
-import logging
 import os
 from datetime import datetime, time
-from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
-
-
-class _IgnoreBareMode(logging.Filter):
-    def filter(self, record):
-        return "missing ScriptRunContext" not in record.getMessage()
-
-
-logging.getLogger(
-    "streamlit.runtime.scriptrunner_utils.script_run_context"
-).addFilter(_IgnoreBareMode())
+from _app_common import ensure_analysis_dir
 
 load_dotenv()
 
@@ -25,10 +14,6 @@ st.set_page_config(
     layout="wide",
 )
 
-import sys
-from pathlib import Path as _Path
-
-sys.path.insert(0, str(_Path(__file__).parent.parent))
 from _style import apply_style, page_header, render_global_navigation
 
 apply_style()
@@ -38,8 +23,7 @@ page_header(
     "檢查每筆交易是否符合原始策略，分開評估交易品質與交易結果。",
 )
 
-ANALYSIS_DIR = Path(__file__).parent.parent / "analysis"
-ANALYSIS_DIR.mkdir(exist_ok=True)
+ANALYSIS_DIR = ensure_analysis_dir()
 
 DEFAULT_STRATEGY_RULES = """1. 本益比需合理或偏低。
 2. 股價不得離重要均線太遠。

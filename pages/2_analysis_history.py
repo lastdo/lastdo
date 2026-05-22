@@ -1,17 +1,7 @@
-import logging
-
-class _IgnoreBareMode(logging.Filter):
-    def filter(self, record):
-        return "missing ScriptRunContext" not in record.getMessage()
-
-logging.getLogger(
-    "streamlit.runtime.scriptrunner_utils.script_run_context"
-).addFilter(_IgnoreBareMode())
-
 import streamlit as st
 import pandas as pd
-from pathlib import Path
 from datetime import datetime
+from _app_common import ensure_analysis_dir
 
 st.set_page_config(
     page_title="分析記錄",
@@ -19,15 +9,11 @@ st.set_page_config(
     layout="wide",
 )
 
-import sys
-from pathlib import Path as _Path
-sys.path.insert(0, str(_Path(__file__).parent.parent))
 from _style import apply_style, page_header, render_global_navigation
 apply_style()
 page_header("📂", "分析記錄", "儲存自 AI 台股趨勢分析系統的技術面資料（CSV）與 AI 報告（Markdown）")
 
-ANALYSIS_DIR = Path(__file__).parent.parent / "analysis"
-ANALYSIS_DIR.mkdir(exist_ok=True)
+ANALYSIS_DIR = ensure_analysis_dir()
 
 # ── 掃描 analysis 資料夾 ──────────────────────────
 csv_files = sorted(ANALYSIS_DIR.glob("*.csv"), key=lambda f: f.stat().st_mtime, reverse=True)
