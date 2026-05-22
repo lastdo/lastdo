@@ -1,22 +1,12 @@
-﻿import logging
-
-
-class _IgnoreBareMode(logging.Filter):
-    def filter(self, record):
-        return "missing ScriptRunContext" not in record.getMessage()
-
-
-logging.getLogger(
-    "streamlit.runtime.scriptrunner_utils.script_run_context"
-).addFilter(_IgnoreBareMode())
-
-import os
+﻿import os
 import time
 import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from _app_common import FINMIND_URL
+from _export_utils import dataframe_to_csv_bytes
 
 load_dotenv()
 
@@ -27,7 +17,6 @@ URL_TWSE_PRICE  = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 URL_TWSE_REV    = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
 URL_TPEX_PRICE  = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 URL_TPEX_REV    = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"
-FINMIND_URL     = "https://api.finmindtrade.com/api/v4/data"
 SEASON_LINE_MAX_PREMIUM = 0.12  # 現價最多高於季線 12%
 
 # ------------------------------
@@ -35,9 +24,6 @@ SEASON_LINE_MAX_PREMIUM = 0.12  # 現價最多高於季線 12%
 # ------------------------------
 st.set_page_config(page_title="成長股篩選", page_icon="📈", layout="wide")
 
-import sys
-from pathlib import Path as _Path
-sys.path.insert(0, str(_Path(__file__).parent.parent))
 from _style import apply_style, page_header, render_global_navigation
 apply_style()
 page_header("📈", "成長股篩選", "從營收成長、成交量、股價與去年全年 EPS 找出合理本益比的成長股。")
@@ -117,7 +103,7 @@ if not run_btn:
         _disp["去年同月營收"] = pd.to_numeric(_disp["去年同月營收"], errors="coerce").fillna(0).round(0).astype(int)
         _disp = _disp.sort_values("收盤價", ascending=False).reset_index(drop=True)
         st.dataframe(_disp, use_container_width=True, hide_index=True)
-        _csv = _disp.to_csv(index=False, encoding="cp950", errors="replace")
+        _csv = dataframe_to_csv_bytes(_disp)
         st.download_button("下載 CSV", _csv,
             f"growth_screener_{datetime.today().strftime('%Y%m%d')}.csv", "text/csv")
         st.stop()
@@ -726,7 +712,7 @@ st.dataframe(
     },
 )
 
-csv_bytes = display_df.to_csv(index=False, encoding="cp950", errors="replace")
+csv_bytes = dataframe_to_csv_bytes(display_df)
 st.download_button(
     label="下載 CSV",
     data=csv_bytes,
@@ -737,6 +723,4 @@ st.download_button(
 st.divider()
 st.caption("資料來源：股價/營收來自 TWSE + TPEX OpenAPI；EPS 來自 FinMind。")
 st.caption("本工具僅供研究參考，請自行評估投資風險。")
-
-
 

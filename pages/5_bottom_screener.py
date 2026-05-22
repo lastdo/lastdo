@@ -1,15 +1,3 @@
-import logging
-
-
-class _IgnoreBareMode(logging.Filter):
-    def filter(self, record):
-        return "missing ScriptRunContext" not in record.getMessage()
-
-
-logging.getLogger(
-    "streamlit.runtime.scriptrunner_utils.script_run_context"
-).addFilter(_IgnoreBareMode())
-
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,17 +17,15 @@ URL_TWSE_PRICE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 URL_TWSE_REV = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
 URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 URL_TPEX_REV = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"
-FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
+from _app_common import FINMIND_URL
+from _export_utils import dataframe_to_csv_bytes
+from _page_bootstrap import ROOT_DIR
 
 # ─────────────────────────────────────────────
 # 頁面設定
 # ─────────────────────────────────────────────
 st.set_page_config(page_title="底部剛起漲選股器", page_icon="📈", layout="wide")
 
-import sys
-from pathlib import Path as _Path
-
-sys.path.insert(0, str(_Path(__file__).parent.parent))
 from _style import apply_style, page_header, render_global_navigation
 
 apply_style()
@@ -188,7 +174,7 @@ if not run_btn:
         _disp = make_display_df(_r)
         st.subheader(f"📋 底部剛起漲名單（共 {len(_disp)} 檔）")
         st.dataframe(_disp, use_container_width=True, hide_index=True)
-        _csv = _disp.to_csv(index=False, encoding="cp950", errors="replace")
+        _csv = dataframe_to_csv_bytes(_disp)
         st.download_button(
             "⬇️ 下載 CSV（Excel 可直接開啟）", _csv,
             f"底部剛起漲選股_{datetime.today().strftime('%Y%m%d')}.csv", "text/csv",
@@ -701,7 +687,7 @@ st.dataframe(
     },
 )
 
-csv = display_df.to_csv(index=False, encoding="cp950", errors="replace")
+csv = dataframe_to_csv_bytes(display_df)
 st.download_button(
     "⬇️ 下載 CSV（Excel 可直接開啟）", csv,
     f"底部剛起漲選股_{datetime.today().strftime('%Y%m%d')}.csv", "text/csv",
