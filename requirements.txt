@@ -1,0 +1,9 @@
+streamlit==1.55.0
+requests==2.33.0
+pandas==2.3.3
+plotly==6.6.0
+anthropic==0.86.0
+groq==1.1.1
+python-dotenv>=1.0.1
+gspread>=6.1.2
+google-auth>=2.35.0

@@ -1,4 +1,3 @@
-import json
 import requests
 import streamlit as st
 from datetime import datetime, timedelta
@@ -6,7 +5,16 @@ from datetime import datetime, timedelta
 import pandas as pd
 import plotly.express as px
 
-from _app_common import FINMIND_URL, configure_runtime, get_portfolio_file
+from _app_common import FINMIND_URL, configure_runtime
+from _portfolio_store import (
+    create_portfolio_item,
+    delete_portfolio_item,
+    get_default_family_id,
+    get_store_status,
+    list_family_ids,
+    load_portfolio as load_portfolio_items,
+    update_portfolio_item as update_portfolio_record,
+)
 from _style import apply_style, render_global_navigation
 
 configure_runtime()
@@ -63,8 +71,6 @@ def fetch_recent_stock_price(symbol: str) -> dict:
         }
     except Exception:
         return {}
-
-PORTFOLIO_FILE = get_portfolio_file()
 
 st.set_page_config(page_title="庫存股管理", page_icon="💼", layout="wide")
 
@@ -155,33 +161,6 @@ st.markdown("""
 /* ── 隱藏預設 Streamlit 頁尾 ── */
 </style>
 """, unsafe_allow_html=True)
-
-
-def load_portfolio() -> list:
-    if PORTFOLIO_FILE.exists():
-        with open(PORTFOLIO_FILE, "r", encoding="utf-8") as f:
-            portfolio = json.load(f)
-            for stock in portfolio:
-                stock["symbol"] = str(stock.get("symbol", "")).strip()
-                stock["price"] = _to_float(stock.get("price"))
-                stock["shares"] = _to_int(stock.get("shares"))
-            return portfolio
-    return []
-
-
-def save_portfolio(portfolio: list) -> None:
-    with open(PORTFOLIO_FILE, "w", encoding="utf-8") as f:
-        json.dump(portfolio, f, ensure_ascii=False, indent=2)
-
-
-def update_portfolio_item(index: int, price=None, shares=None) -> None:
-    portfolio = load_portfolio()
-    if index < 0 or index >= len(portfolio):
-        raise IndexError("portfolio index out of range")
-
-    portfolio[index]["price"] = _to_float(price)
-    portfolio[index]["shares"] = _to_int(shares)
-    save_portfolio(portfolio)
 
 
 def _to_float(value):
@@ -306,10 +285,29 @@ def build_portfolio_rows(portfolio: list, stock_names: dict) -> pd.DataFrame:
     return df
 
 
-portfolio = load_portfolio()
 stock_names = fetch_all_stock_names()
+store_status = get_store_status()
+known_family_ids = list_family_ids()
 with st.sidebar:
     render_global_navigation("inventory")
+    st.markdown("---")
+    st.text_input(
+        "family_id",
+        value=st.session_state.get("inventory_family_id", get_default_family_id()),
+        key="inventory_family_id",
+        help="同一份 Google Sheet 內用 family_id 區分不同家人的持股。",
+    )
+    if known_family_ids:
+        st.caption("已知 family_id：" + ", ".join(known_family_ids[:8]))
+    if store_status.using_google_sheets:
+        st.caption("持股儲存：Google Sheets")
+    elif store_status.configured:
+        st.caption("持股儲存：本機 portfolio.json")
+    else:
+        st.warning(store_status.message)
+
+family_id = st.session_state.get("inventory_family_id", get_default_family_id()).strip()
+portfolio = load_portfolio_items(family_id)
 
 # ── 頁首橫幅 ─────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -401,9 +399,13 @@ if submitted:
             shares_val = int(new_shares.strip()) if new_shares.strip() else None
         except ValueError:
             shares_val = None
-        new_item = {"symbol": new_symbol, "price": price_val, "shares": shares_val}
-        portfolio.append(new_item)
-        save_portfolio(portfolio)
+        create_portfolio_item(
+            family_id=family_id,
+            stock_id=new_symbol,
+            avg_cost=price_val,
+            shares=shares_val,
+            stock_name=stock_names.get(new_symbol, ""),
+        )
         item_type = "持股" if price_val and shares_val else "自選股"
         st.success(f"✅ 已新增「{new_symbol}」{stock_names.get(new_symbol, '')} 至{item_type}清單")
         st.rerun()
@@ -548,6 +550,7 @@ else:
     h5.markdown('<div class="col-hdr">操作</div>', unsafe_allow_html=True)
 
     for i, stock in enumerate(portfolio):
+        row_id = str(stock.get("row_id", ""))
         symbol = str(stock.get("symbol", ""))
         matched = portfolio_df[portfolio_df["symbol"] == symbol]
         item_type = matched.iloc[0]["type"] if not matched.empty else "自選股"
@@ -587,9 +590,10 @@ else:
                     label_visibility="collapsed",
                 )
             if st.button("儲存", key=f"save_{i}", use_container_width=True):
-                update_portfolio_item(
-                    i,
-                    price=edit_price if edit_price > 0 else None,
+                update_portfolio_record(
+                    row_id=row_id,
+                    family_id=family_id,
+                    avg_cost=edit_price if edit_price > 0 else None,
                     shares=edit_shares if edit_shares > 0 else None,
                 )
                 st.toast(f"已更新「{symbol}」的持股資料")
@@ -602,9 +606,8 @@ else:
                     st.switch_page("pages/1_app_tw.py")
             with btn_col2:
                 if st.button("🗑️", key=f"del_{i}", help=f"移除 {symbol}"):
-                    removed = portfolio.pop(i)
-                    save_portfolio(portfolio)
-                    st.toast(f"✅ 已移除「{removed['symbol']}」")
+                    delete_portfolio_item(row_id=row_id, family_id=family_id)
+                    st.toast(f"✅ 已移除「{symbol}」")
                     st.rerun()
 
         st.markdown("<hr class='row-divider'>", unsafe_allow_html=True)
