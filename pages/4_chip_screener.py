@@ -7,6 +7,8 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from _finmind_api import fetch_finmind_result, get_retry_after, get_status_code, parse_eps_dataframe
+from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
 
 load_dotenv()
 
@@ -137,24 +139,12 @@ if not finmind_token:
 # ─────────────────────────────────────────────
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_json_twse(url: str) -> list:
-    resp = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-    resp.raise_for_status()
-    return resp.json()
+    return fetch_json_twse_base(url)
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_json_tpex(url: str) -> list:
-    headers = {"User-Agent": "Mozilla/5.0"}
-    last_err = None
-    for attempt in range(3):
-        try:
-            resp = requests.get(url, timeout=90, headers=headers)
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            last_err = e
-            time.sleep(2 * (attempt + 1))
-    raise last_err
+    return fetch_json_tpex_base(url)
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -261,20 +251,17 @@ def get_finmind_eps(symbol: str, token: str) -> pd.DataFrame:
     }
     try:
         time.sleep(1)
-        resp = requests.get(FINMIND_URL, params=params, timeout=20)
-        result = resp.json()
+        result = fetch_finmind_result(params, timeout=20)
         status = result.get("status")
+        status_code = get_status_code(result)
         if status == 403:
-            raise RuntimeError(f"FINMIND_BANNED:{result.get('retry_after', '?')}")
-        if status != 200 or not result.get("data"):
+            raise RuntimeError(f"FINMIND_BANNED:{get_retry_after(result)}")
+        if status_code != 200 or not result.get("data"):
             return pd.DataFrame()
-        df = pd.DataFrame(result["data"])
-        df = df[df["type"] == "EPS"].copy()
+        df = parse_eps_dataframe(result)
         if df.empty:
             return pd.DataFrame()
-        df["date"] = pd.to_datetime(df["date"])
-        df["eps"]  = pd.to_numeric(df["value"], errors="coerce")
-        return df[["date", "eps"]].sort_values("date").reset_index(drop=True)
+        return df
     except RuntimeError:
         raise
     except Exception:

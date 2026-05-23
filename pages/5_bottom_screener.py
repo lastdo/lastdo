@@ -7,6 +7,16 @@ import pandas as pd
 import requests
 import streamlit as st
 from dotenv import load_dotenv
+from _finmind_api import (
+    fetch_finmind_result,
+    get_result_message,
+    get_retry_after,
+    get_status_code,
+    is_rate_limited,
+    parse_eps_dataframe,
+    parse_price_dataframe,
+)
+from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
 
 load_dotenv()
 
@@ -209,24 +219,12 @@ if not run_btn:
 # ─────────────────────────────────────────────
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_json_twse(url: str) -> list:
-    resp = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-    resp.raise_for_status()
-    return resp.json()
+    return fetch_json_twse_base(url)
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_json_tpex(url: str) -> list:
-    headers = {"User-Agent": "Mozilla/5.0"}
-    last_err = None
-    for attempt in range(3):
-        try:
-            resp = requests.get(url, timeout=90, headers=headers)
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            last_err = e
-            time.sleep(2 * (attempt + 1))
-    raise last_err
+    return fetch_json_tpex_base(url)
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -241,18 +239,17 @@ def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token
         params["token"] = token
 
     time.sleep(1.2)
-    resp = requests.get(FINMIND_URL, params=params, timeout=30)
-    result = resp.json()
+    result = fetch_finmind_result(params, timeout=30)
     status = result.get("status")
-    msg = str(result.get("msg") or result.get("message") or result.get("error") or "")
-    status_code = int(status) if str(status).isdigit() else status
+    msg = get_result_message(result)
+    status_code = get_status_code(result)
 
-    if status_code in (402, 403, 429) or "ban" in msg.lower() or "rate" in msg.lower():
-        raise RuntimeError(f"FINMIND_BANNED:{result.get('retry_after', '?')}:{msg}")
+    if is_rate_limited(result):
+        raise RuntimeError(f"FINMIND_BANNED:{get_retry_after(result)}:{msg}")
     if status_code != 200 or not result.get("data"):
         return pd.DataFrame()
 
-    df = pd.DataFrame(result["data"])
+    df = parse_price_dataframe(result)
     if df.empty:
         return pd.DataFrame()
     df = df.rename(columns={"max": "high", "min": "low", "Trading_Volume": "volume"})
@@ -278,23 +275,19 @@ def get_finmind_last_yr_eps(symbol: str, token: str = "") -> float | None:
         params["token"] = token
 
     time.sleep(1.2)
-    resp = requests.get(FINMIND_URL, params=params, timeout=20)
-    result = resp.json()
+    result = fetch_finmind_result(params, timeout=20)
     status = result.get("status")
-    msg = str(result.get("msg") or result.get("message") or result.get("error") or "")
-    status_code = int(status) if str(status).isdigit() else status
+    msg = get_result_message(result)
+    status_code = get_status_code(result)
 
-    if status_code in (402, 403, 429) or "ban" in msg.lower() or "rate" in msg.lower():
-        raise RuntimeError(f"FINMIND_BANNED:{result.get('retry_after', '?')}:{msg}")
+    if is_rate_limited(result):
+        raise RuntimeError(f"FINMIND_BANNED:{get_retry_after(result)}:{msg}")
     if status_code != 200 or not result.get("data"):
         return None
 
-    df = pd.DataFrame(result["data"])
-    df = df[df["type"] == "EPS"].copy()
+    df = parse_eps_dataframe(result)
     if df.empty:
         return None
-    df["date"] = pd.to_datetime(df["date"])
-    df["eps"] = pd.to_numeric(df["value"], errors="coerce")
     df["year"] = df["date"].dt.year
     cur_year = datetime.today().year
     for yr in sorted(df["year"].unique(), reverse=True):
