@@ -6,3 +6,5 @@ plotly
 openpyxl
 FinMind
 anthropic
+groq
+python-dotenv
