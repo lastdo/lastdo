@@ -54,7 +54,7 @@ with st.sidebar:
         "FinMind Token（選填）",
         value=os.getenv("FINMIND_TOKEN", ""),
         type="password",
-        help="用於查詢通過前置條件股票的近半年歷史股價及去年全年EPS；未輸入時略過EPS篩選。",
+        help="用於查詢通過前置條件股票的近半年歷史股價；估值改採官方上市櫃API。",
     ).strip()
 
     support_months = int(st.number_input(
@@ -77,11 +77,6 @@ with st.sidebar:
         "股價 大於（元）", value=100.0, min_value=0.0, step=5.0,
         help="先剔除 100 元以下股票，降低低價股造成的候選數量。",
     )
-    last_yr_eps_min = st.number_input(
-        "去年全年EPS 大於（元）", value=5.0, min_value=0.0, max_value=500.0, step=0.5,
-        help="去年（上一個完整會計年度）四季EPS合計，需 FinMind Token；未輸入 Token 時略過。",
-    )
-
     run_btn = st.button("🔍 開始選股", use_container_width=True, type="primary")
     if st.button("🗑️ 清除快取（強制重新抓資料）", use_container_width=True):
         st.session_state.pop("bottom_screener_result", None)
@@ -91,7 +86,7 @@ with st.sidebar:
     st.markdown("---")
     st.caption("📡 股價/月營收：TWSE + TPEX OpenAPI（免費）")
     st.caption("📡 近半年歷史股價：FinMind TaiwanStockPrice（三線程查詢）")
-    st.caption("📡 去年全年EPS：FinMind TaiwanStockFinancialStatements（三線程查詢）")
+    st.caption("📡 本益比：官方上市櫃 API")
     st.caption("📢 本系統僅供學術研究，不構成投資建議")
 
 
@@ -138,7 +133,6 @@ def format_retry_at(seconds):
 # 說明頁 / 恢復上次結果
 # ─────────────────────────────────────────────
 def make_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
-    _has_eps = "last_yr_eps" in result_df.columns
     _rename = {
         "stock_id": "股票代碼",
         "stock_name": "股票名稱",
@@ -156,9 +150,6 @@ def make_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
         "股票代碼", "股票名稱", "市場", "收盤價(元)", "近半年支撐價(元)", "支撐日期",
         "自底部漲幅(%)", "前一日成交量(張)", "單月營收年增率(%)", "最新營收年月", "歷史交易日數",
     ]
-    if _has_eps:
-        _rename["last_yr_eps"] = "去年全年EPS(元)"
-        _cols.insert(_cols.index("歷史交易日數"), "去年全年EPS(元)")
     display_df = result_df.rename(columns=_rename)[_cols]
     for col in ["收盤價(元)", "近半年支撐價(元)", "自底部漲幅(%)", "單月營收年增率(%)"]:
         display_df[col] = pd.to_numeric(display_df[col], errors="coerce").round(2)
@@ -168,12 +159,8 @@ def make_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
     display_df["歷史交易日數"] = pd.to_numeric(
         display_df["歷史交易日數"], errors="coerce"
     ).fillna(0).round(0).astype(int)
-    if _has_eps:
-        display_df["去年全年EPS(元)"] = pd.to_numeric(
-            display_df["去年全年EPS(元)"], errors="coerce"
-        ).round(2)
     return display_df.sort_values(
-        ["自底部漲幅(%)", "單月營收年增率(%)"], ascending=[True, False]
+        ["收盤價(元)", "自底部漲幅(%)"], ascending=[False, True]
     ).reset_index(drop=True)
 
 
@@ -201,16 +188,13 @@ if not run_btn:
 | 股價 | > **{price_min:.0f}** 元 | TWSE/TPEX OpenAPI（免費） |
 | 前一日成交量 | ≥ **{int(vol_min):,}** 張 | TWSE/TPEX OpenAPI（免費） |
 | 月營收(單月)年成長率 | > **{rev_growth_min:.0f}%** | TWSE/TPEX OpenAPI（免費） |
-| 去年全年EPS | > **{last_yr_eps_min:.1f}** 元 | FinMind TaiwanStockFinancialStatements |
-| 本益比 | **不篩選** | 已移除 |
-
 **策略邏輯：**
 
 先剔除 100 元以下股票，再用成交量與月營收年增率篩出基本流動性與營收仍正向的股票，
 再查詢候選股近 {support_months} 個月歷史價格，以期間最低價作為底部支撐價，
-通過起漲幅條件後再以去年全年EPS篩選，確保基本盈利能力仍佳。
+通過起漲幅條件後留下仍具技術面底部型態的股票。
 
-> 通過股價、成交量與營收條件的候選股會全部進入近半年支撐價及EPS篩選。
+> 通過股價、成交量與營收條件的候選股會直接進入近半年支撐價篩選。
 """)
     st.stop()
 
@@ -438,7 +422,7 @@ df_history_targets = df_candidates.sort_values(
 ).reset_index(drop=True)
 
 st.caption(
-    f"通過股價、成交量與營收條件的 {len(df_history_targets)} 檔，將全部查詢近半年歷史股價。"
+    f"通過股價、成交量與營收條件的 {len(df_history_targets)} 檔，將再查詢近半年歷史股價。"
 )
 
 # ─────────────────────────────────────────────
@@ -531,75 +515,10 @@ df_result = df_support[
 ].copy().reset_index(drop=True)
 
 # ─────────────────────────────────────────────
-# Step 6：三線程查詢去年EPS，篩選 EPS > last_yr_eps_min
+# Step 6：估值篩選已移除
 # ─────────────────────────────────────────────
 if df_result.empty:
     pass  # 無候選股，跳過 EPS 查詢
-elif not finmind_token:
-    st.info("ℹ️ 未輸入 FinMind Token，略過去年EPS篩選。")
-else:
-    _eps_n = len(df_result)
-    eps_bar = st.progress(0, text=f"📊 三線程查詢去年EPS（0 / {_eps_n} 檔）...")
-    _eps_results: dict = {}
-    _eps_banned_msg = ""
-    _eps_done = 0
-
-    def fetch_eps_row(sid: str):
-        try:
-            val = get_finmind_last_yr_eps(sid, finmind_token)
-            return "ok", sid, val
-        except RuntimeError as _e:
-            _err = str(_e)
-            if "FINMIND_BANNED" in _err:
-                return "banned", sid, _err
-            return "failed", sid, None
-        except Exception:
-            return "failed", sid, None
-
-    with ThreadPoolExecutor(max_workers=3) as _eps_executor:
-        _eps_futures_list = [
-            _eps_executor.submit(fetch_eps_row, str(r["stock_id"]))
-            for _, r in df_result.iterrows()
-        ]
-        for _f in as_completed(_eps_futures_list):
-            _sts, _sid, _payload = _f.result()
-            _eps_done += 1
-            if _sts == "ok":
-                _eps_results[_sid] = _payload
-            elif _sts == "banned":
-                _eps_banned_msg = _payload
-                for _pf in _eps_futures_list:
-                    _pf.cancel()
-                break
-            else:
-                _eps_results[_sid] = None
-            eps_bar.progress(
-                min(_eps_done / _eps_n, 1.0),
-                text=f"📊 三線程查詢去年EPS（{_eps_done} / {_eps_n} 檔）...",
-            )
-
-    eps_bar.progress(1.0, text="✅ 去年EPS查詢完成")
-
-    if _eps_banned_msg and not _eps_results:
-        _r2 = parse_finmind_retry_seconds(_eps_banned_msg)
-        st.error(
-            f"❌ FinMind API 查詢 EPS 時 IP 暫時封鎖。\n\n"
-            f"剩餘等待時間：約 **{format_wait_time(_r2)}**；"
-            f"預估可重新查詢時間：**{format_retry_at(_r2)}**。"
-        )
-        st.stop()
-
-    if _eps_banned_msg and _eps_results:
-        _r2 = parse_finmind_retry_seconds(_eps_banned_msg)
-        st.warning(
-            f"⚠️ FinMind EPS 查詢中途被 rate limit，僅完成 {len(_eps_results)} / {_eps_n} 檔，結果可能不完整。"
-            f"剩餘等待時間：約 **{format_wait_time(_r2)}**；預估可重新查詢時間：**{format_retry_at(_r2)}**。"
-        )
-
-    df_result["last_yr_eps"] = df_result["stock_id"].astype(str).map(_eps_results)
-    df_result = df_result[
-        df_result["last_yr_eps"].notna() & (df_result["last_yr_eps"] > last_yr_eps_min)
-    ].copy().reset_index(drop=True)
 
 progress.progress(100, text="✅ 選股完成！")
 st.session_state["bottom_screener_result"] = df_result
@@ -614,7 +533,7 @@ col1.metric("符合條件", f"{count} 檔")
 col2.metric("底部起漲幅", f"≤ {rebound_max:.0f}%")
 col3.metric("成交量", f"≥ {int(vol_min):,} 張")
 col4.metric("月營收年增", f"> {rev_growth_min:.0f}%")
-col5.metric("去年EPS", f"> {last_yr_eps_min:.1f} 元" if finmind_token else "（未查詢）")
+col5.metric("股價", f"> {price_min:.0f} 元")
 
 st.divider()
 
@@ -637,13 +556,13 @@ if count == 0:
     st.warning(
         f"⚠️ 已成功計算 {len(df_support)} 檔支撐價，但自底部起漲幅 ≤ {rebound_max:.0f}% 後無符合。"
     )
-    _near = df_support.sort_values("rebound_pct").head(20)
+    _near = df_support.sort_values(["close", "rebound_pct"], ascending=[False, True]).head(20)
     if not _near.empty:
         st.caption("以下為距離底部支撐較近的前 20 檔（供調整條件參考）：")
         st.dataframe(make_display_df(_near), use_container_width=True, hide_index=True)
     st.stop()
 
-st.subheader(f"📋 底部剛起漲名單（共 {count} 檔，以自底部漲幅由低到高排序）")
+st.subheader(f"📋 底部剛起漲名單（共 {count} 檔，以收盤價降冪排序）")
 
 try:
     _price_date_raw = raw_twse_price[0].get("Date", "")
@@ -675,7 +594,6 @@ st.dataframe(
         "前一日成交量(張)": st.column_config.NumberColumn("前一日成交量(張)", format="%d"),
         "單月營收年增率(%)": st.column_config.NumberColumn("單月營收年增率(%)", format="%.2f"),
         "最新營收年月": st.column_config.TextColumn("最新營收年月", width="small"),
-        "去年全年EPS(元)": st.column_config.NumberColumn("去年全年EPS(元)", format="%.2f"),
         "歷史交易日數": st.column_config.NumberColumn("歷史交易日數", format="%d"),
     },
 )

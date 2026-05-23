@@ -1,14 +1,11 @@
 import os
-import time
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from _finmind_api import fetch_finmind_result, get_retry_after, get_status_code, parse_eps_dataframe
 from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
+from _public_valuation import attach_public_valuation, fetch_public_pe_ratios
 
 load_dotenv()
 
@@ -39,13 +36,6 @@ with st.sidebar:
     st.header("⚙️ 選股條件")
     st.divider()
 
-    finmind_token = st.text_input(
-        "FinMind Token",
-        value=os.getenv("FINMIND_TOKEN", ""),
-        type="password",
-        help="用於查詢外資買賣超資料及季EPS（計算本益比）",
-    ).strip()
-
     days_n = int(st.number_input(
         "近 N 日（交易日）", value=3, min_value=1, max_value=30, step=1,
         help="統計最近 N 個交易日的外資累積買超",
@@ -56,7 +46,7 @@ with st.sidebar:
     )
     pe_max = st.number_input(
         "本益比 小於（倍）", value=20.0, min_value=1.0, max_value=500.0, step=1.0,
-        help="推估全年EPS算法，需FinMind Token",
+        help="使用官方上市櫃 API 提供的個股本益比。",
     )
     price_min = st.number_input("股價 大於（元）", value=50.0, min_value=0.0, step=5.0)
     vol_min   = st.number_input("當日成交量 大於（張）", value=1000, min_value=0, step=100)
@@ -69,7 +59,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("📡 股價：TWSE + TPEX OpenAPI（免費）")
-    st.caption("📡 外資買賣超：TWSE + TPEX（免費）｜ 季EPS：FinMind")
+    st.caption("📡 外資買賣超：TWSE + TPEX（免費）｜ 本益比：官方上市櫃 API")
     st.caption("📢 本系統僅供學術研究，不構成投資建議")
 
 # ─────────────────────────────────────────────
@@ -89,8 +79,8 @@ if not run_btn:
             "vol_lot":             "當日成交量(張)",
             "foreign_net_buy_lot": "外資近N日買超(張)",
             "pe_ratio":            "本益比(倍)",
-            "pe_label":            "推估EPS基礎",
-        })[["股票代碼", "股票名稱", "市場", "收盤價(元)", "本益比(倍)", "推估EPS基礎",
+            "pe_label":            "PE口徑",
+        })[["股票代碼", "股票名稱", "市場", "收盤價(元)", "本益比(倍)", "PE口徑",
             "外資近N日買超(張)", "當日成交量(張)"]]
         _disp["收盤價(元)"]        = _disp["收盤價(元)"].round(2)
         _disp["本益比(倍)"]        = pd.to_numeric(_disp["本益比(倍)"], errors="coerce").round(2)
@@ -109,8 +99,8 @@ if not run_btn:
         st.markdown(f"""
 | 條件 | 設定值 | 資料來源 |
 |------|--------|---------|
-| 近N日外資累積買超 | > **{foreign_buy_min:,.0f}** 張 | FinMind 三大法人買賣超 |
-| 本益比 | < **{pe_max:.0f}** 倍 | FinMind 季EPS（推估全年EPS算法） |
+| 近N日外資累積買超 | > **{foreign_buy_min:,.0f}** 張 | TWSE + TPEX 三大法人資料 |
+| 本益比 | < **{pe_max:.0f}** 倍 | 官方上市櫃 API |
 | 股價 | > **{price_min:.0f}** 元 | TWSE/TPEX OpenAPI（免費） |
 | 當日成交量 | > **{int(vol_min):,}** 張 | TWSE/TPEX OpenAPI（免費） |
 
@@ -118,20 +108,16 @@ if not run_btn:
 
 統計最近 {days_n} 個交易日內，外資（外資及陸資、外資自營商）每日淨買超（買入－賣出）之總和，單位換算為張（1張=1000股）。
 
-**本益比算法（同成長股選股器）：**
+**本益比算法：**
 
-推估全年EPS = 今年已公布各季EPS + 去年對應剩餘季EPS（補足4季）
+本益比 = 官方上市櫃 API 提供之個股本益比
 
-本益比 = 收盤價 / 推估全年EPS
+近四季EPS = 收盤價 / 官方本益比
 
 > 流程：先用免費 API 篩出通過股價、成交量條件的候選股，
 > 再用免費 TWSE/TPEX 三大法人 API 取近N日外資買賣超，笻出達標候選股，
-> 最後才對候選股查詢 FinMind 季EPS計算本益比，節省 API 用量。
+> 最後直接套用官方本益比，不再額外查 FinMind 季EPS。
 """)
-    st.stop()
-
-if not finmind_token:
-    st.error("❌ 請輸入 FinMind Token（用於查詢季 EPS 計算本益比）")
     st.stop()
 
 # ─────────────────────────────────────────────
@@ -236,69 +222,6 @@ def fetch_tpex_3insti(date_roc: str) -> pd.DataFrame:
     except Exception as e:
         st.warning(f"⚠️ TPEX 三大法人 API 例外：{e}")
         return pd.DataFrame()
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def get_finmind_eps(symbol: str, token: str) -> pd.DataFrame:
-    """查詢單一股票季EPS（快取30分鐘）"""
-    start_year = datetime.today().year - 3
-    params = {
-        "dataset": "TaiwanStockFinancialStatements",
-        "data_id": symbol,
-        "start_date": f"{start_year}-01-01",
-        "end_date": datetime.today().strftime("%Y-%m-%d"),
-        "token": token,
-    }
-    try:
-        time.sleep(1)
-        result = fetch_finmind_result(params, timeout=20)
-        status = result.get("status")
-        status_code = get_status_code(result)
-        if status == 403:
-            raise RuntimeError(f"FINMIND_BANNED:{get_retry_after(result)}")
-        if status_code != 200 or not result.get("data"):
-            return pd.DataFrame()
-        df = parse_eps_dataframe(result)
-        if df.empty:
-            return pd.DataFrame()
-        return df
-    except RuntimeError:
-        raise
-    except Exception:
-        return pd.DataFrame()
-
-
-def calc_forward_pe(close_price: float, eps_q: pd.DataFrame):
-    """推估全年EPS算法計算本益比（同 1_app_tw.py 及 3_growth_screener.py）"""
-    if eps_q is None or eps_q.empty:
-        return None, "EPS資料不足"
-    q = eps_q.copy()
-    q["year"]  = q["date"].dt.year
-    q["month"] = q["date"].dt.month
-    latest_year   = int(q["year"].max())
-    latest_year_q = q[q["year"] == latest_year].sort_values("date")
-    num_q_latest  = len(latest_year_q)
-    prev_year     = latest_year - 1
-    prev_year_q   = q[q["year"] == prev_year].sort_values("date")
-    latest_months  = set(latest_year_q["month"].tolist())
-    remaining_prev = prev_year_q[~prev_year_q["month"].isin(latest_months)]
-    forward_eps = 0.0
-    for _, r in latest_year_q.iterrows():
-        forward_eps += float(r["eps"])
-    for _, r in remaining_prev.iterrows():
-        forward_eps += float(r["eps"])
-    if forward_eps <= 0:
-        return None, f"推估EPS={forward_eps:.2f}（虧損）"
-    pe = close_price / forward_eps
-    if num_q_latest >= 4:
-        label = f"{latest_year}年全年"
-    else:
-        rem_start = num_q_latest + 1
-        cur_part  = f"{latest_year}Q1" if num_q_latest == 1 else f"{latest_year}Q1-Q{num_q_latest}"
-        prev_part = f"{prev_year}Q{rem_start}" if rem_start == 4 else f"{prev_year}Q{rem_start}-Q4"
-        label = f"{cur_part}+{prev_part}"
-    return pe, label
-
 
 # ─────────────────────────────────────────────
 # Step 1：抓取股價（免費 API）
@@ -408,7 +331,7 @@ df_candidates = df_merged[
 ].copy().reset_index(drop=True)
 
 n_candidates = len(df_candidates)
-progress.progress(65, text=f"🏦 join後{_n_matched}檔有外資紀錄，買超>{foreign_buy_min:,.0f}張通過 {n_candidates} 檔，查詢季EPS計算本益比...")
+progress.progress(65, text=f"🏦 join後{_n_matched}檔有外資紀錄，買超>{foreign_buy_min:,.0f}張通過 {n_candidates} 檔，準備套用官方本益比...")
 
 if n_candidates == 0:
     progress.progress(100, text="✅ 完成")
@@ -430,73 +353,15 @@ if n_candidates == 0:
     st.stop()
 
 # ─────────────────────────────────────────────
-# Step 7：平行查詢 FinMind 季EPS，計算推估本益比
+# Step 7：套用官方本益比與反推近四季EPS
 # ─────────────────────────────────────────────
-WORKERS      = 3
-_banned_flag = threading.Event()
-_lock        = threading.Lock()
-
-
-def _fetch_one(row_tuple):
-    """單一股票查詢，回傳 (stock_id, eps_df, error_str)"""
-    _, row = row_tuple
-    sid = row["stock_id"]
-    if _banned_flag.is_set():
-        return sid, pd.DataFrame(), "banned"
-    try:
-        eps_q = get_finmind_eps(sid, finmind_token)
-        return sid, eps_q, ""
-    except RuntimeError as e:
-        if "FINMIND_BANNED" in str(e):
-            _banned_flag.set()
-        return sid, pd.DataFrame(), str(e)
-    except Exception as e:
-        return sid, pd.DataFrame(), str(e)
-
-
-eps_bar = st.progress(0, text=f"🔍 平行查詢季EPS（0 / {n_candidates} 檔，{WORKERS} 條線程）...")
-
-results    = []
-_done      = 0
-_banned_msg = ""
-
-rows_list = list(df_candidates.iterrows())
-with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-    future_map = {executor.submit(_fetch_one, r): r[1]["stock_id"] for r in rows_list}
-    for future in as_completed(future_map):
-        sid_done, eps_q, err = future.result()
-        with _lock:
-            _done += 1
-            done_snap = _done
-        eps_bar.progress(
-            min(done_snap / n_candidates, 1.0),
-            text=f"🔍 平行查詢季EPS（{done_snap} / {n_candidates} 檔完成）",
-        )
-        if err == "banned" or "FINMIND_BANNED" in err:
-            _banned_msg = err
-            continue
-        row = df_candidates[df_candidates["stock_id"] == sid_done].iloc[0]
-        pe, pe_label = calc_forward_pe(float(row["close"]), eps_q)
-        results.append({"stock_id": sid_done, "pe_ratio": pe, "pe_label": pe_label})
-
-if _banned_msg and not results:
-    _retry = _banned_msg.split(":")[-1]
-    try:
-        _wait_min = int(_retry) // 60 + 1
-    except Exception:
-        _wait_min = "?"
-    eps_bar.progress(1.0, text="❌ FinMind IP 封鎖")
-    st.error(
-        f"❌ FinMind API 回傳 **IP 暫時封鎖**（ip banned）\n\n"
-        f"請等待約 **{_wait_min} 分鐘**後再試。\n\n"
-        f"原因：短時間內呼叫次數過多，超過 FinMind 免費額度速率限制。"
-    )
+progress.progress(78, text=f"🔍 候選股 {n_candidates} 檔，套用官方上市櫃本益比...")
+df_public_pe = fetch_public_pe_ratios()
+if df_public_pe.empty:
+    progress.progress(100, text="✅ 完成")
+    st.error("❌ 官方上市櫃本益比資料目前抓取失敗，無法套用 PE 條件，請稍後再試。")
     st.stop()
-
-eps_bar.progress(1.0, text="✅ 季EPS查詢完成")
-
-df_pe  = pd.DataFrame(results)
-df_all = df_candidates.merge(df_pe, on="stock_id", how="left")
+df_all = attach_public_valuation(df_candidates, df_public_pe)
 
 # 套用本益比條件
 df_result = df_all[
@@ -560,8 +425,8 @@ display_df = df_result.rename(columns={
     "vol_lot":             "當日成交量(張)",
     "foreign_net_buy_lot": "外資近N日買超(張)",
     "pe_ratio":            "本益比(倍)",
-    "pe_label":            "推估EPS基礎",
-})[["股票代碼", "股票名稱", "市場", "收盤價(元)", "本益比(倍)", "推估EPS基礎",
+    "pe_label":            "PE口徑",
+})[["股票代碼", "股票名稱", "市場", "收盤價(元)", "本益比(倍)", "PE口徑",
     "外資近N日買超(張)", "當日成交量(張)"]]
 
 display_df["收盤價(元)"]        = display_df["收盤價(元)"].round(2)
@@ -580,7 +445,7 @@ st.dataframe(
         "市場":              st.column_config.TextColumn("市場",       width="small"),
         "收盤價(元)":        st.column_config.NumberColumn("收盤價(元)",        format="%.2f"),
         "本益比(倍)":        st.column_config.NumberColumn("本益比(倍)",        format="%.2f"),
-        "推估EPS基礎":       st.column_config.TextColumn("推估EPS基礎", width="medium"),
+        "PE口徑":            st.column_config.TextColumn("PE口徑", width="medium"),
         "外資近N日買超(張)": st.column_config.NumberColumn("外資近N日買超(張)", format="%d"),
         "當日成交量(張)":    st.column_config.NumberColumn("當日成交量(張)",    format="%d"),
     },
@@ -595,5 +460,5 @@ st.download_button(
 )
 
 st.divider()
-st.caption("📡 股價：TWSE + TPEX OpenAPI（免費）｜ 外資買賣超：TWSE + TPEX（免費）｜ 季EPS：FinMind（僅候選股）")
+st.caption("📡 股價：TWSE + TPEX OpenAPI（免費）｜ 外資買賣超：TWSE + TPEX（免費）｜ 本益比：官方上市櫃 API")
 st.caption("📢 本系統僅供學術研究與教育用途，不構成任何投資建議")
