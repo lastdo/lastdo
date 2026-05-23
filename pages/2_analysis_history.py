@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from _app_common import ensure_analysis_dir
+from _export_utils import CSV_ENCODING
 
 st.set_page_config(
     page_title="分析記錄",
@@ -108,7 +109,7 @@ for file in filtered:
         # 線上預覽
         if file.suffix == ".csv":
             try:
-                df = pd.read_csv(file, encoding="utf-8-sig")
+                df = pd.read_csv(file, encoding=CSV_ENCODING)
                 st.dataframe(df, use_container_width=True, height=400)
             except Exception as e:
                 st.error(f"無法讀取 CSV：{e}")

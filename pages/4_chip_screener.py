@@ -61,8 +61,8 @@ with st.sidebar:
 
     run_btn = st.button("🔍 開始選股", use_container_width=True, type="primary")
     if st.button("🗑️ 清除快取（強制重新抓資料）", use_container_width=True):
-        st.cache_data.clear()
-        st.success("✅ 快取已清除，請重新選股")
+        st.session_state.pop("chip_screener_result", None)
+        st.success("✅ 本頁結果已清除，請重新選股")
         st.stop()
 
     st.markdown("---")

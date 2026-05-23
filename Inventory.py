@@ -7,7 +7,7 @@ import pandas as pd
 import plotly.express as px
 
 from _app_common import FINMIND_URL, configure_runtime, get_portfolio_file
-from _style import render_global_navigation
+from _style import apply_style, render_global_navigation
 
 configure_runtime()
 
@@ -69,10 +69,10 @@ PORTFOLIO_FILE = get_portfolio_file()
 st.set_page_config(page_title="庫存股管理", page_icon="💼", layout="wide")
 
 # ── 全域樣式 ────────────────────────────────────────────────────────────────────
+apply_style()
 st.markdown("""
 <style>
 /* ── 背景 ── */
-.stApp { background: #f0f4f8; }
 
 /* ── 頁首橫幅 ── */
 .inv-header {
@@ -117,70 +117,10 @@ st.markdown("""
 .stat-value.pos { color: #dc2626; }
 .stat-value.neg { color: #16a34a; }
 
-.status-badge {
-    display: inline-block;
-    border-radius: 999px;
-    padding: 3px 10px;
-    font-size: 0.72rem;
-    font-weight: 800;
-}
-.status-badge.holding { background: #fee2e2; color: #b91c1c; }
-.status-badge.watch { background: #e0f2fe; color: #0369a1; }
-
 /* ── 新增表單標題 ── */
-.form-section-title {
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: #1e293b;
-    margin: 24px 0 4px;
-    padding-left: 4px;
-    border-left: 3px solid #2563eb;
-    padding-left: 10px;
-}
-
 /* ── 表單容器美化 ── */
-div[data-testid="stForm"] {
-    background: #ffffff;
-    border-radius: 12px;
-    padding: 20px 20px 12px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.07);
-    border: 1px solid #e2e8f0;
-}
-
 /* ── 清單標題列 ── */
-.list-header {
-    background: #1e293b;
-    border-radius: 10px 10px 0 0;
-    padding: 11px 16px;
-    margin-bottom: 2px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-.list-header span { color: #94a3b8; font-size: 0.78rem; font-weight: 700;
-                    text-transform: uppercase; letter-spacing: 0.07em; }
-.list-header .lh-count {
-    background: #2563eb;
-    color: #fff;
-    border-radius: 20px;
-    padding: 1px 10px;
-    font-size: 0.75rem;
-    font-weight: 700;
-    margin-left: auto;
-}
-
 /* ── 每行欄標題 ── */
-.col-hdr {
-    color: #94a3b8;
-    font-size: 0.72rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    padding: 10px 0 4px;
-    border-bottom: 1px solid #e2e8f0;
-    margin-bottom: 6px;
-}
-
 /* ── 股票代碼標籤 ── */
 .sym-badge {
     display: inline-block;
@@ -192,51 +132,13 @@ div[data-testid="stForm"] {
     font-weight: 800;
     letter-spacing: 1px;
 }
-.stock-name-text {
-    color: #334155;
-    font-size: 0.92rem;
-    font-weight: 600;
-    margin-top: 4px;
-}
-
 /* ── 數值欄 ── */
 .val-main  { color: #0f172a; font-size: 1rem; font-weight: 700; }
 .val-label { color: #94a3b8; font-size: 0.72rem; margin-top: 2px; }
 
 /* ── 隔線每行 ── */
-.row-divider {
-    border: none;
-    border-top: 1px solid #f1f5f9;
-    margin: 4px 0;
-}
-
 /* ── 空狀態 ── */
-.empty-state {
-    text-align: center;
-    padding: 64px 20px;
-    background: #ffffff;
-    border-radius: 12px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.06);
-}
-.empty-state .es-icon { font-size: 3.5rem; }
-.empty-state h3 { color: #475569; margin: 14px 0 6px; font-size: 1.1rem; }
-.empty-state p  { color: #94a3b8; font-size: 0.88rem; }
-
 /* ── 主要按鈕 ── */
-.stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, #1d4ed8, #3b82f6) !important;
-    border: none !important;
-    border-radius: 8px !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.02em !important;
-    transition: all 0.18s ease !important;
-    box-shadow: 0 2px 8px rgba(37,99,235,0.3) !important;
-}
-.stButton > button[kind="primary"]:hover {
-    transform: translateY(-1px) !important;
-    box-shadow: 0 4px 14px rgba(37,99,235,0.45) !important;
-}
-
 /* ── 刪除按鈕（secondary） ── */
 .stButton > button[kind="secondary"] {
     border-radius: 8px !important;
@@ -251,9 +153,6 @@ div[data-testid="stForm"] {
 }
 
 /* ── 隱藏預設 Streamlit 頁尾 ── */
-#MainMenu, footer { visibility: hidden; }
-div[data-testid="stDecoration"] { display: none; }
-div[data-testid="stSidebarNav"] { display: none; }
 </style>
 """, unsafe_allow_html=True)
 

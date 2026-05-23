@@ -8,7 +8,8 @@ _CSS = """
 .stApp { background: #f0f4f8; }
 
 /* ── 頁首橫幅 ── */
-.page-header {
+.page-header,
+.inv-header {
     background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 55%, #1d4ed8 100%);
     border-radius: 16px;
     padding: 28px 36px;
@@ -18,15 +19,18 @@ _CSS = """
     align-items: center;
     gap: 20px;
 }
-.page-header-icon { font-size: 2.8rem; line-height: 1; }
-.page-header h1 {
+.page-header-icon,
+.inv-header-icon { font-size: 2.8rem; line-height: 1; }
+.page-header h1,
+.inv-header h1 {
     margin: 0 0 5px;
     color: #ffffff;
     font-size: 1.75rem;
     font-weight: 800;
     letter-spacing: -0.3px;
 }
-.page-header p { margin: 0; color: #93c5fd; font-size: 0.86rem; }
+.page-header p,
+.inv-header p { margin: 0; color: #93c5fd; font-size: 0.86rem; }
 
 /* ── 白色卡片容器 ── */
 .card {
@@ -50,14 +54,19 @@ _CSS = """
 .stat-card.c-blue   { border-color: #2563eb; }
 .stat-card.c-green  { border-color: #16a34a; }
 .stat-card.c-purple { border-color: #7c3aed; }
+.stat-card.c-red    { border-color: #dc2626; }
 .stat-card.c-amber  { border-color: #d97706; }
+.stat-card.c-slate  { border-color: #475569; }
 .stat-label { color: #64748b; font-size: 0.74rem; font-weight: 700;
               text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 8px; }
 .stat-value { color: #0f172a; font-size: 1.65rem; font-weight: 800; }
 .stat-sub   { color: #94a3b8; font-size: 0.77rem; margin-top: 4px; }
+.stat-value.pos { color: #dc2626; }
+.stat-value.neg { color: #16a34a; }
 
 /* ── 小節標題線 ── */
-.section-title {
+.section-title,
+.form-section-title {
     font-size: 0.93rem;
     font-weight: 700;
     color: #1e293b;
@@ -66,8 +75,19 @@ _CSS = """
     border-left: 3px solid #2563eb;
 }
 
+.status-badge {
+    display: inline-block;
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 0.72rem;
+    font-weight: 800;
+}
+.status-badge.holding { background: #fee2e2; color: #b91c1c; }
+.status-badge.watch { background: #e0f2fe; color: #0369a1; }
+
 /* ── 表格標題列 ── */
-.table-header {
+.table-header,
+.list-header {
     background: #1e293b;
     border-radius: 10px 10px 0 0;
     padding: 11px 16px;
@@ -76,9 +96,11 @@ _CSS = """
     align-items: center;
     gap: 8px;
 }
-.table-header span { color: #94a3b8; font-size: 0.77rem; font-weight: 700;
+.table-header span,
+.list-header span { color: #94a3b8; font-size: 0.77rem; font-weight: 700;
                      text-transform: uppercase; letter-spacing: 0.07em; }
-.table-header .th-badge {
+.table-header .th-badge,
+.list-header .lh-count {
     background: #2563eb;
     color: #fff;
     border-radius: 20px;
@@ -111,12 +133,24 @@ _CSS = """
     font-weight: 800;
     letter-spacing: 1px;
 }
+.stock-name-text {
+    color: #334155;
+    font-size: 0.92rem;
+    font-weight: 600;
+    margin-top: 4px;
+}
 
 /* ── 數值欄 ── */
 .val-main  { color: #0f172a; font-size: 0.95rem; font-weight: 700; }
 .val-label { color: #94a3b8; font-size: 0.71rem; margin-top: 2px; }
 .val-pos   { color: #16a34a; font-weight: 700; }
 .val-neg   { color: #dc2626; font-weight: 700; }
+
+.row-divider {
+    border: none;
+    border-top: 1px solid #f1f5f9;
+    margin: 4px 0;
+}
 
 /* ── 空狀態 ── */
 .empty-state {
