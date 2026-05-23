@@ -17,6 +17,7 @@ from _finmind_api import (
 )
 from _export_utils import dataframe_to_csv_bytes
 from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
+from _public_valuation import attach_public_valuation, fetch_public_pe_ratios
 
 load_dotenv()
 
@@ -36,7 +37,7 @@ st.set_page_config(page_title="成長股篩選", page_icon="📈", layout="wide"
 
 from _style import apply_style, page_header, render_global_navigation
 apply_style()
-page_header("📈", "成長股篩選", "從營收成長、成交量、股價與去年全年 EPS 找出合理本益比的成長股。")
+page_header("📈", "成長股篩選", "從營收成長、成交量、股價與官方本益比找出合理估值的成長股。")
 
 # ------------------------------
 # 側邊欄條件
@@ -48,15 +49,13 @@ with st.sidebar:
     st.divider()
 
     finmind_token = st.text_input(
-        "FinMind Token",
+        "FinMind Token（選填）",
         value=os.getenv("FINMIND_TOKEN", ""),
         type="password",
-        help="用於查詢 EPS 與計算本益比；若 API 限流，建議降低查詢頻率或稍後再試。",
+        help="僅用於查詢季線（MA60）；本益比改採官方上市櫃API。",
     ).strip()
 
     pe_max = st.number_input("本益比上限（倍）", value=20.0, min_value=1.0, max_value=500.0, step=1.0)
-    last_yr_eps_min = st.number_input("去年全年 EPS 下限（元）", value=5.0, min_value=0.0, max_value=500.0, step=0.5,
-        help="去年全年 EPS 會使用最近完整 4 季加總；需要 FinMind Token 才能查詢。")
     rev_growth_min = st.number_input("近 2 月平均營收年增下限 (%)", value=20.0, min_value=-100.0, max_value=1000.0, step=1.0)
     vol_min = st.number_input("成交量下限（張）", value=1000, min_value=0, step=100)
     price_min = st.number_input("股價下限（元）", value=50.0, min_value=0.0, step=5.0)
@@ -69,7 +68,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("資料來源：股價 / 營收來自 TWSE + TPEX OpenAPI。")
-    st.caption("資料來源：EPS 來自 FinMind（需要 Token）。")
+    st.caption("資料來源：本益比來自官方上市櫃 API。")
     st.caption("本工具僅供研究參考，投資前請自行評估風險。")
 
 # ------------------------------
@@ -93,20 +92,18 @@ if not run_btn:
             "market": "市場",
             "close": "收盤價",
             "pe_ratio": "本益比",
-            "pe_label": "EPS口徑",
+            "pe_label": "PE口徑",
             "vol_lot": "成交量(張)",
             "avg_rev_yoy": "近2月平均營收年增(%)",
             "rev_months": "營收月份",
             "rev_cur": "當月營收",
             "rev_ly": "去年同月營收",
             "rev_ym": "最新營收月份",
-            "prev_year_eps": "去年全年EPS",
-        })[["股票代號","股票名稱","市場","收盤價","本益比","EPS口徑",
-            "去年全年EPS","近2月平均營收年增(%)","營收月份","成交量(張)",
+        })[["股票代號","股票名稱","市場","收盤價","本益比","PE口徑",
+            "近2月平均營收年增(%)","營收月份","成交量(張)",
             "當月營收","去年同月營收","最新營收月份"]]
         _disp["收盤價"] = _disp["收盤價"].round(2)
         _disp["本益比"] = _disp["本益比"].round(2)
-        _disp["去年全年EPS"] = pd.to_numeric(_disp["去年全年EPS"], errors="coerce").round(2)
         _disp["近2月平均營收年增(%)"] = _disp["近2月平均營收年增(%)"].round(2)
         _disp["成交量(張)"] = _disp["成交量(張)"].round(0).astype(int)
         _disp["當月營收"] = pd.to_numeric(_disp["當月營收"], errors="coerce").fillna(0).round(0).astype(int)
@@ -122,25 +119,18 @@ if not run_btn:
         st.markdown(f"""
 | 條件 | 門檻 | 資料來源 |
 |------|------|----------|
-| 本益比 | < **{pe_max:.0f}** 倍 | FinMind EPS 與推估全年 EPS |
-| 去年全年 EPS | > **{last_yr_eps_min:.1f}** 元 | FinMind 最近完整 4 季 EPS 加總 |
+| 本益比 | < **{pe_max:.0f}** 倍 | 官方上市櫃 API |
 | 近 2 月平均營收年增 | > **{rev_growth_min:.0f}%** | TWSE/TPEX OpenAPI 最新營收資料 |
 | 成交量 | > **{int(vol_min):,}** 張 | TWSE/TPEX OpenAPI |
 | 股價 | > **{price_min:.0f}** 元 | TWSE/TPEX OpenAPI |
 
-**本益比是以 AI 分析頁相同的推估全年 EPS 口徑計算。**
+**本頁本益比採官方上市櫃 API 口徑。**
 
-推估全年 EPS = 今年已公告季度 EPS + 去年同期未公告季度 EPS
-
-本益比 = 收盤價 / 推估全年 EPS
+本益比 = 官方上市櫃 API 提供之個股本益比
 
 > 若公開資料來源暫時連不上，可能會出現查詢失敗，稍後再試即可。
-> 若未提供 FinMind Token，系統無法查詢 EPS，也就無法計算本益比。
+> FinMind Token 只在最後查詢季線（MA60）時使用。
 """)
-    st.stop()
-
-if not finmind_token:
-    st.error("請先輸入 FinMind Token，才能查詢 EPS 與計算本益比。")
     st.stop()
 
 # ------------------------------
@@ -155,142 +145,8 @@ def fetch_json_twse(url: str) -> list:
 def fetch_json_tpex(url: str) -> list:
     return fetch_json_tpex_base(url)
 
-
-_MONTH_TO_Q = {3: 1, 6: 2, 9: 3, 12: 4}
-
-
-def calc_forward_pe(close_price: float, eps_q: pd.DataFrame):
-    """用最新已公告季度 EPS 推估全年本益比。"""
-    if eps_q is None or eps_q.empty:
-        return None, "EPS 資料不足"
-
-    q = eps_q.copy()
-    q["year"] = q["date"].dt.year
-    q["month"] = q["date"].dt.month
-    latest_year = int(q["year"].max())
-    latest_year_q = q[q["year"] == latest_year].sort_values("date")
-    num_q_latest = len(latest_year_q)
-    prev_year = latest_year - 1
-    prev_year_q = q[q["year"] == prev_year].sort_values("date")
-
-    latest_months = set(latest_year_q["month"].tolist())
-    remaining_prev = prev_year_q[~prev_year_q["month"].isin(latest_months)]
-    forward_eps = 0.0
-    for _, r in latest_year_q.iterrows():
-        forward_eps += float(r["eps"])
-    for _, r in remaining_prev.iterrows():
-        forward_eps += float(r["eps"])
-
-    if forward_eps <= 0:
-        return None, f"推估 EPS={forward_eps:.2f} <= 0"
-
-    pe = close_price / forward_eps
-    if num_q_latest >= 4:
-        label = f"{latest_year} 全年"
-    else:
-        rem_start = num_q_latest + 1
-        cur_part = f"{latest_year}Q1" if num_q_latest == 1 else f"{latest_year}Q1-Q{num_q_latest}"
-        prev_part = f"{prev_year}Q{rem_start}" if rem_start == 4 else f"{prev_year}Q{rem_start}-Q4"
-        label = f"{cur_part}+{prev_part}"
-    return pe, label
-
-
-def calc_prev_year_eps(eps_q: pd.DataFrame):
-    """回傳最近一個完整年度的 EPS 加總。"""
-    if eps_q is None or eps_q.empty:
-        return None
-    q = eps_q.copy()
-    q["year"] = q["date"].dt.year
-    cur_year = datetime.today().year  # 略過尚未完整公告的當年度資料。
-    for yr in sorted(q["year"].unique(), reverse=True):
-        if yr >= cur_year:
-            continue  # 只採用已完整結束的年度，避免用到未完整年度。
-        yr_data = q[q["year"] == yr]
-        if len(yr_data) >= 4:
-            return float(yr_data["eps"].sum())
-    return None
-
-
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_public_pe_ratios() -> pd.DataFrame:
-    """抓取 TWSE/TPEX 當日公開本益比，用來先縮小 FinMind 查詢名單。"""
-    frames = []
-
-    try:
-        raw_twse = fetch_json_twse(URL_TWSE_PRICE)
-        df_twse = pd.DataFrame(raw_twse)
-        if {"Code", "PEratio"}.issubset(df_twse.columns):
-            frames.append(
-                df_twse[["Code", "PEratio"]].rename(
-                    columns={"Code": "stock_id", "PEratio": "pe_ratio_public"}
-                )
-            )
-    except Exception:
-        pass
-
-    try:
-        raw_tpex = fetch_json_tpex(URL_TPEX_PRICE)
-        df_tpex = pd.DataFrame(raw_tpex)
-        if {"SecuritiesCompanyCode", "PriceEarningRatio"}.issubset(df_tpex.columns):
-            frames.append(
-                df_tpex[["SecuritiesCompanyCode", "PriceEarningRatio"]].rename(
-                    columns={
-                        "SecuritiesCompanyCode": "stock_id",
-                        "PriceEarningRatio": "pe_ratio_public",
-                    }
-                )
-            )
-    except Exception:
-        pass
-
-    if not frames:
-        return pd.DataFrame(columns=["stock_id", "pe_ratio_public"])
-
-    df = pd.concat(frames, ignore_index=True)
-    df["stock_id"] = df["stock_id"].astype(str).str.strip()
-    df["pe_ratio_public"] = (
-        df["pe_ratio_public"].astype(str).str.replace(",", "", regex=False).str.strip()
-    )
-    df["pe_ratio_public"] = pd.to_numeric(df["pe_ratio_public"], errors="coerce")
-    df.loc[df["pe_ratio_public"] <= 0, "pe_ratio_public"] = pd.NA
-    return df.drop_duplicates("stock_id")
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def get_finmind_eps(symbol: str, token: str) -> pd.DataFrame:
-    """查詢個股近三年季 EPS。"""
-    start_year = datetime.today().year - 3
-    params = {
-        "dataset": "TaiwanStockFinancialStatements",
-        "data_id": symbol,
-        "start_date": f"{start_year}-01-01",
-        "end_date": datetime.today().strftime("%Y-%m-%d"),
-        "token": token,
-    }
-    try:
-        time.sleep(2.2)
-        result = fetch_finmind_result(params, timeout=20)
-        status = result.get("status")
-        msg = get_result_message(result)
-        status_code = get_status_code(result)
-        if is_rate_limited(result):
-            raise RuntimeError(
-                f"FINMIND_LIMIT:{status}:{get_retry_after(result)}:{msg}"
-            )
-        if status_code != 200 or not result.get("data"):
-            return pd.DataFrame()
-        df = parse_eps_dataframe(result)
-        if df.empty:
-            return pd.DataFrame()
-        return df
-    except RuntimeError:
-        raise
-    except Exception:
-        return pd.DataFrame()
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def get_finmind_ma60(symbol: str, token: str) -> tuple[float | None, int | None, str]:
+def get_finmind_ma60(symbol: str, token: str = "") -> tuple[float | None, int | None, str]:
     """取得個股最新 60 日均線（季線）與查詢狀態。"""
     start_date = (datetime.today() - timedelta(days=140)).strftime("%Y-%m-%d")
     params = {
@@ -298,8 +154,9 @@ def get_finmind_ma60(symbol: str, token: str) -> tuple[float | None, int | None,
         "data_id": symbol,
         "start_date": start_date,
         "end_date": datetime.today().strftime("%Y-%m-%d"),
-        "token": token,
     }
+    if token:
+        params["token"] = token
     try:
         time.sleep(1.2)
         result = fetch_finmind_result(params, timeout=20)
@@ -470,121 +327,36 @@ if n_candidates == 0:
     st.stop()
 
 
-# 用公開本益比排序查詢順序，但不排除任何候選股。
-progress.progress(71, text="用公開本益比排序 FinMind 查詢順序...")
+# 用官方上市櫃本益比建立估值資料。
+progress.progress(71, text="抓取官方上市櫃本益比...")
 df_public_pe = fetch_public_pe_ratios()
-df_candidates = df_candidates.merge(df_public_pe, on="stock_id", how="left")
+if df_public_pe.empty:
+    progress.progress(100, text="完成")
+    st.error("官方上市櫃本益比資料目前抓取失敗，無法套用 PE 條件，請稍後再試。")
+    st.stop()
+df_candidates = attach_public_valuation(df_candidates, df_public_pe)
 
-df_finmind_targets = df_candidates.copy()
-df_finmind_targets["_pe_sort"] = df_finmind_targets["pe_ratio_public"].fillna(pe_max)
-df_finmind_targets = df_finmind_targets.sort_values(
+df_candidates["_pe_sort"] = df_candidates["pe_ratio"].fillna(pe_max)
+df_candidates = df_candidates.sort_values(
     ["_pe_sort", "avg_rev_yoy", "vol_lot"],
     ascending=[True, False, False],
 ).drop(columns=["_pe_sort"]).reset_index(drop=True)
 
-df_candidates = df_finmind_targets.copy().reset_index(drop=True)
 n_candidates = len(df_candidates)
+progress.progress(82, text=f"候選股 {n_candidates} 檔，套用官方本益比條件...")
 
-# ------------------------------
-# Step 4.5：查詢候選股去年全年 EPS，作為後續基本面門檻
-# ------------------------------
-progress.progress(74, text=f"候選股 {n_candidates} 檔，開始查詢去年全年 EPS（FinMind）...")
-
-# ------------------------------
-# Step 5：低速查詢 FinMind EPS，計算推估本益比
-# ------------------------------
-eps_bar = st.progress(0, text=f"正在查詢 EPS：0 / {n_candidates} 檔（低速模式）...")
-
-results = []
-errors = []
-_banned_msg = ""
-
-for done_count, (_, row) in enumerate(df_candidates.iterrows(), start=1):
-    sid_done = row["stock_id"]
-    try:
-        eps_q = get_finmind_eps(sid_done, finmind_token)
-        pe, pe_label = calc_forward_pe(float(row["close"]), eps_q)
-        prev_eps = calc_prev_year_eps(eps_q)
-        results.append(
-            {
-                "stock_id": sid_done,
-                "pe_ratio": pe,
-                "pe_label": pe_label,
-                "prev_year_eps": prev_eps,
-            }
-        )
-    except RuntimeError as e:
-        err = str(e)
-        if "FINMIND_LIMIT" in err:
-            _banned_msg = err
-            break
-        errors.append((sid_done, err))
-    except Exception as e:
-        errors.append((sid_done, str(e)))
-
-    eps_bar.progress(
-        min(done_count / n_candidates, 1.0),
-        text=f"正在查詢 EPS：{done_count} / {n_candidates} 檔"
-    )
-
-if _banned_msg and not results:
-    _parts = _banned_msg.split(":", 3)
-    _retry = _parts[2] if len(_parts) >= 3 else "?"
-    try:
-        _wait_min = int(_retry) // 60 + 1
-    except Exception:
-        _wait_min = "?"
-    eps_bar.progress(1.0, text="FinMind 達到查詢上限")
-    st.error(
-        f"FinMind API 暫時限制此 IP，建議等待約 {_wait_min} 分鐘後再試。\n\n"
-        f"若常發生，可降低同時查詢數或稍後重新執行。"
-    )
-    st.stop()
-
-if _banned_msg:
-    _parts = _banned_msg.split(":", 3)
-    _status = _parts[1] if len(_parts) >= 2 else "?"
-    progress.progress(100, text="FinMind EPS 查詢受限")
-    st.error(
-        f"FinMind EPS 查詢途中收到狀態碼 {_status}，本次只有部分股票完成，結果不完整，已停止避免誤判。"
-    )
-    st.stop()
-
-eps_bar.progress(1.0, text="EPS 查詢完成")
-
-if errors:
-    _err_preview = "；".join(f"{sid}: {msg}" for sid, msg in errors[:3])
-    st.warning(f"共有 {len(errors)} 檔 EPS 查詢失敗。範例：{_err_preview}")
-
-df_pe = pd.DataFrame(results)
-df_all = df_candidates.merge(df_pe, on="stock_id", how="left")
-
-# 先套用去年全年 EPS 門檻。
-df_after_eps = df_all[
-    df_all["prev_year_eps"].notna() & (df_all["prev_year_eps"] > last_yr_eps_min)
-].copy().reset_index(drop=True)
-
-n_after_eps = len(df_after_eps)
-progress.progress(88, text=f"EPS 篩選完成：{n_after_eps} 檔")
-
-if n_after_eps == 0:
-    progress.progress(100, text="完成")
-    st.warning(f"候選股 {n_candidates} 檔中，沒有股票通過去年 EPS > {last_yr_eps_min:.1f} 的條件。")
-    st.stop()
-
-# 再套用本益比上限。
-df_result = df_after_eps[
-    df_after_eps["pe_ratio"].notna() & (df_after_eps["pe_ratio"] < pe_max)
+df_result = df_candidates[
+    df_candidates["pe_ratio"].notna() & (df_candidates["pe_ratio"] < pe_max)
 ].copy().sort_values("avg_rev_yoy", ascending=False).reset_index(drop=True)
 
 if df_result.empty:
     progress.progress(100, text="完成")
-    st.warning(f"通過 EPS 條件的 {n_after_eps} 檔中，沒有股票符合本益比 < {pe_max:.0f}。")
-    df_no_pe = df_after_eps[df_after_eps["pe_ratio"].notna()].sort_values("pe_ratio")
+    st.warning(f"候選股 {n_candidates} 檔中，沒有股票符合本益比 < {pe_max:.0f}。")
+    df_no_pe = df_candidates[df_candidates["pe_ratio"].notna()].sort_values("pe_ratio")
     if not df_no_pe.empty:
-        st.caption("以下為已通過 EPS 條件但未通過本益比門檻的股票（前 20 檔）。")
+        st.caption("以下為通過其他條件但未通過本益比門檻的股票（前 20 檔）。")
         st.dataframe(
-            df_no_pe[["stock_id", "stock_name", "market", "close", "pe_ratio", "prev_year_eps", "avg_rev_yoy"]].head(20),
+            df_no_pe[["stock_id", "stock_name", "market", "close", "pe_ratio", "avg_rev_yoy"]].head(20),
             use_container_width=True,
             hide_index=True,
         )
@@ -632,15 +404,15 @@ rev_ym = df_result["rev_ym"].iloc[0] if count > 0 else "-"
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 col1.metric("結果數量", f"{count} 檔")
 col2.metric("本益比", f"< {pe_max:.0f}")
-col3.metric("去年 EPS", f"> {last_yr_eps_min:.1f}")
-col4.metric("近 2 月營收年增", f"> {rev_growth_min:.0f}%")
-col5.metric("成交量", f"> {int(vol_min):,} 張")
-col6.metric("股價", f"> {price_min:.0f}")
+col3.metric("近 2 月營收年增", f"> {rev_growth_min:.0f}%")
+col4.metric("成交量", f"> {int(vol_min):,} 張")
+col5.metric("股價", f"> {price_min:.0f}")
+col6.metric("PE 口徑", "官方API")
 
 st.divider()
 
 if count == 0:
-    st.warning("通過 EPS 與本益比條件的股票，在季線 12% 條件下全數被排除。")
+    st.warning("通過本益比條件的股票，在季線 12% 條件下全數被排除。")
     st.stop()
 
 st.subheader(f"成長股策略結果：{count} 檔（最新營收月份：{rev_ym}）")
@@ -660,23 +432,21 @@ display_df = df_result.rename(columns={
     "market": "市場",
     "close": "收盤價",
     "pe_ratio": "本益比",
-    "pe_label": "EPS口徑",
+    "pe_label": "PE口徑",
     "vol_lot": "成交量(張)",
     "avg_rev_yoy": "近2月平均營收年增(%)",
     "rev_months": "營收月份",
     "rev_cur": "當月營收",
     "rev_ly": "去年同月營收",
     "rev_ym": "最新營收月份",
-    "prev_year_eps": "去年全年EPS",
 })[[
-    "股票代號", "股票名稱", "市場", "收盤價", "本益比", "EPS口徑",
-    "去年全年EPS", "近2月平均營收年增(%)", "營收月份", "成交量(張)",
+    "股票代號", "股票名稱", "市場", "收盤價", "本益比", "PE口徑",
+    "近2月平均營收年增(%)", "營收月份", "成交量(張)",
     "當月營收", "去年同月營收", "最新營收月份",
 ]]
 
 display_df["收盤價"] = display_df["收盤價"].round(2)
 display_df["本益比"] = display_df["本益比"].round(2)
-display_df["去年全年EPS"] = pd.to_numeric(display_df["去年全年EPS"], errors="coerce").round(2)
 display_df["近2月平均營收年增(%)"] = display_df["近2月平均營收年增(%)"].round(2)
 display_df["成交量(張)"] = display_df["成交量(張)"].round(0).astype(int)
 display_df["當月營收"] = pd.to_numeric(display_df["當月營收"], errors="coerce").fillna(0).round(0).astype(int)
@@ -693,8 +463,7 @@ st.dataframe(
         "市場": st.column_config.TextColumn("市場", width="small"),
         "收盤價": st.column_config.NumberColumn("收盤價", format="%.2f"),
         "本益比": st.column_config.NumberColumn("本益比", format="%.2f"),
-        "EPS口徑": st.column_config.TextColumn("EPS口徑", width="medium"),
-        "去年全年EPS": st.column_config.NumberColumn("去年全年EPS", format="%.2f"),
+        "PE口徑": st.column_config.TextColumn("PE口徑", width="medium"),
         "近2月平均營收年增(%)": st.column_config.NumberColumn("近2月平均營收年增(%)", format="%.2f%%"),
         "營收月份": st.column_config.TextColumn("營收月份", width="medium"),
         "成交量(張)": st.column_config.NumberColumn("成交量(張)", format="%d"),
@@ -712,6 +481,6 @@ st.download_button(
 )
 
 st.divider()
-st.caption("資料來源：股價/營收來自 TWSE + TPEX OpenAPI；EPS 來自 FinMind。")
+st.caption("資料來源：股價/營收來自 TWSE + TPEX OpenAPI；本益比來自官方上市櫃口徑。")
 st.caption("本工具僅供研究參考，請自行評估投資風險。")
 
