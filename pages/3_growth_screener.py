@@ -6,7 +6,17 @@ import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from _app_common import FINMIND_URL
+from _finmind_api import (
+    fetch_finmind_result,
+    parse_eps_dataframe,
+    parse_price_dataframe,
+    get_result_message,
+    get_retry_after,
+    get_status_code,
+    is_rate_limited,
+)
 from _export_utils import dataframe_to_csv_bytes
+from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
 
 load_dotenv()
 
@@ -138,25 +148,12 @@ if not finmind_token:
 # ------------------------------
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_json_twse(url: str) -> list:
-    resp = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-    resp.raise_for_status()
-    return resp.json()
+    return fetch_json_twse_base(url)
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_json_tpex(url: str) -> list:
-    """抓取 TPEX JSON，使用較長 timeout 與簡單重試。"""
-    headers = {"User-Agent": "Mozilla/5.0"}
-    last_err = None
-    for attempt in range(3):
-        try:
-            resp = requests.get(url, timeout=90, headers=headers, stream=False)
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            last_err = e
-            time.sleep(2 * (attempt + 1))  # 2s, 4s, 6s
-    raise last_err
+    return fetch_json_tpex_base(url)
 
 
 _MONTH_TO_Q = {3: 1, 6: 2, 9: 3, 12: 4}
@@ -272,24 +269,20 @@ def get_finmind_eps(symbol: str, token: str) -> pd.DataFrame:
     }
     try:
         time.sleep(2.2)
-        resp = requests.get(FINMIND_URL, params=params, timeout=20)
-        result = resp.json()
+        result = fetch_finmind_result(params, timeout=20)
         status = result.get("status")
-        msg = str(result.get("msg") or result.get("message") or result.get("error") or "")
-        status_code = int(status) if str(status).isdigit() else status
-        if status_code in (402, 403, 429) or "ban" in msg.lower() or "rate" in msg.lower():
+        msg = get_result_message(result)
+        status_code = get_status_code(result)
+        if is_rate_limited(result):
             raise RuntimeError(
-                f"FINMIND_LIMIT:{status}:{result.get('retry_after', '?')}:{msg}"
+                f"FINMIND_LIMIT:{status}:{get_retry_after(result)}:{msg}"
             )
         if status_code != 200 or not result.get("data"):
             return pd.DataFrame()
-        df = pd.DataFrame(result["data"])
-        df = df[df["type"] == "EPS"].copy()
+        df = parse_eps_dataframe(result)
         if df.empty:
             return pd.DataFrame()
-        df["date"] = pd.to_datetime(df["date"])
-        df["eps"] = pd.to_numeric(df["value"], errors="coerce")
-        return df[["date", "eps"]].sort_values("date").reset_index(drop=True)
+        return df
     except RuntimeError:
         raise
     except Exception:
@@ -309,17 +302,15 @@ def get_finmind_ma60(symbol: str, token: str) -> tuple[float | None, int | None,
     }
     try:
         time.sleep(1.2)
-        resp = requests.get(FINMIND_URL, params=params, timeout=20)
-        result = resp.json()
+        result = fetch_finmind_result(params, timeout=20)
         status = result.get("status")
-        msg = str(result.get("msg") or result.get("message") or result.get("error") or "")
-        status_code = int(status) if str(status).isdigit() else status
+        msg = get_result_message(result)
+        status_code = get_status_code(result)
         if status_code != 200 or not result.get("data"):
             return None, status_code, msg
-        df = pd.DataFrame(result["data"])
+        df = parse_price_dataframe(result)
         if df.empty or "close" not in df.columns:
             return None, status_code, msg
-        df["date"] = pd.to_datetime(df["date"])
         df = df.sort_values("date").reset_index(drop=True)
         df["close"] = pd.to_numeric(df["close"], errors="coerce")
         ma = df["close"].rolling(60, min_periods=60).mean().iloc[-1]
