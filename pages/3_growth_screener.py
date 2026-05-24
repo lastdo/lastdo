@@ -205,6 +205,44 @@ def render_growth_alert_summary(display_df: pd.DataFrame) -> None:
     col5.metric("價格領先", flattened.count("價格領先"))
 
 
+def render_growth_result_overview(display_df: pd.DataFrame, data_month: str) -> None:
+    if display_df.empty or "警示標記" not in display_df.columns:
+        return
+
+    alerts = display_df["警示標記"].astype(str)
+    positive_count = alerts.str.contains("趨勢續強", regex=False).sum()
+    risk_count = alerts.str.contains("成長失真|獲利未跟上|估值過熱|價格領先", regex=True).sum()
+    normal_count = (alerts == "正常").sum()
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("候選檔數", f"{len(display_df)} 檔")
+    col2.metric("正向訊號", int(positive_count))
+    col3.metric("風險訊號", int(risk_count))
+    col4.metric("正常觀察", int(normal_count), help=f"最新營收月份：{data_month or '-'}")
+
+
+def render_growth_table(display_df: pd.DataFrame) -> None:
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "警示標記": st.column_config.TextColumn("警示標記", width="medium"),
+            "股票代號": st.column_config.TextColumn("股票代號", width="small"),
+            "股票名稱": st.column_config.TextColumn("股票名稱", width="medium"),
+            "市場": st.column_config.TextColumn("市場", width="small"),
+            "收盤價": st.column_config.NumberColumn("收盤價", format="%.2f"),
+            "本益比": st.column_config.NumberColumn("本益比", format="%.2f"),
+            "PE口徑": st.column_config.TextColumn("PE口徑", width="medium"),
+            "近2月平均營收年增(%)": st.column_config.NumberColumn("近2月平均營收年增(%)", format="%.2f%%"),
+            "營收月份": st.column_config.TextColumn("營收月份", width="medium"),
+            "成交量(張)": st.column_config.NumberColumn("成交量(張)", format="%d"),
+            "當月營收": st.column_config.NumberColumn("當月營收", format="%d"),
+            "去年同月營收": st.column_config.NumberColumn("去年同月營收", format="%d"),
+        },
+    )
+
+
 # ------------------------------
 # 初始畫面 / 顯示上次結果
 # ------------------------------
@@ -217,8 +255,9 @@ if not run_btn:
         _rev_ym = _r["rev_ym"].iloc[0] if _count > 0 else "-"
         st.subheader(f"成長股策略結果：{_count} 檔（最新營收月份：{_rev_ym}）")
         _disp = make_growth_display_df(build_growth_alert_flags(_r, pe_max, rev_growth_min))
+        render_growth_result_overview(_disp, _rev_ym)
         render_growth_alert_summary(_disp)
-        st.dataframe(_disp, use_container_width=True, hide_index=True)
+        render_growth_table(_disp)
         _csv = dataframe_to_csv_bytes(_disp)
         st.download_button(
             "下載 CSV",
@@ -552,27 +591,9 @@ except Exception:
     pass
 
 display_df = make_growth_display_df(build_growth_alert_flags(df_result, pe_max, rev_growth_min))
+render_growth_result_overview(display_df, rev_ym)
 render_growth_alert_summary(display_df)
-
-st.dataframe(
-    display_df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "警示標記": st.column_config.TextColumn("警示標記", width="medium"),
-        "股票代號": st.column_config.TextColumn("股票代號", width="small"),
-        "股票名稱": st.column_config.TextColumn("股票名稱", width="medium"),
-        "市場": st.column_config.TextColumn("市場", width="small"),
-        "收盤價": st.column_config.NumberColumn("收盤價", format="%.2f"),
-        "本益比": st.column_config.NumberColumn("本益比", format="%.2f"),
-        "PE口徑": st.column_config.TextColumn("PE口徑", width="medium"),
-        "近2月平均營收年增(%)": st.column_config.NumberColumn("近2月平均營收年增(%)", format="%.2f%%"),
-        "營收月份": st.column_config.TextColumn("營收月份", width="medium"),
-        "成交量(張)": st.column_config.NumberColumn("成交量(張)", format="%d"),
-        "當月營收": st.column_config.NumberColumn("當月營收", format="%d"),
-        "去年同月營收": st.column_config.NumberColumn("去年同月營收", format="%d"),
-    },
-)
+render_growth_table(display_df)
 
 csv_bytes = dataframe_to_csv_bytes(display_df)
 st.download_button(

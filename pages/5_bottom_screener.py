@@ -246,14 +246,67 @@ def make_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
+def render_bottom_result_overview(display_df: pd.DataFrame, support_window_label: str) -> None:
+    alert_col = "警示標記" if "警示標記" in display_df.columns else "霅衣內璅?"
+    if display_df.empty or alert_col not in display_df.columns:
+        return
+
+    alerts = display_df[alert_col].astype(str)
+    positive_count = alerts.str.contains("貼近支撐|起漲初段", regex=True).sum()
+    risk_count = alerts.str.contains("空間縮小|營收轉弱|反彈無量", regex=True).sum()
+    normal_count = (alerts == "正常").sum()
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("候選檔數", f"{len(display_df)} 檔")
+    col2.metric("正向訊號", int(positive_count))
+    col3.metric("風險訊號", int(risk_count))
+    col4.metric("正常觀察", int(normal_count), help=f"支撐區間：{support_window_label}")
+
+
+def render_bottom_table(display_df: pd.DataFrame) -> None:
+    alert_col = "警示標記" if "警示標記" in display_df.columns else "霅衣內璅?"
+    code_col = "股票代碼" if "股票代碼" in display_df.columns else "?∠巨隞?Ⅳ"
+    name_col = "股票名稱" if "股票名稱" in display_df.columns else "?∠巨?迂"
+    market_col = "市場" if "市場" in display_df.columns else "撣"
+    close_col = "收盤價(元)" if "收盤價(元)" in display_df.columns else "?嗥????"
+    support_col = "近半年支撐價(元)" if "近半年支撐價(元)" in display_df.columns else "餈?撟湔?(??"
+    support_date_col = "支撐日期" if "支撐日期" in display_df.columns else "?舀??交?"
+    rebound_col = "自底部漲幅(%)" if "自底部漲幅(%)" in display_df.columns else "?芸??冽撞撟?%)"
+    volume_col = "前一日成交量(張)" if "前一日成交量(張)" in display_df.columns else "???交?鈭日?(撘?"
+    revenue_col = "單月營收年增率(%)" if "單月營收年增率(%)" in display_df.columns else "?格??撟游???%)"
+    rev_month_col = "最新營收年月" if "最新營收年月" in display_df.columns else "??啁??嗅僑??"
+    history_col = "歷史交易日數" if "歷史交易日數" in display_df.columns else "甇瑕鈭斗??交"
+
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            alert_col: st.column_config.TextColumn(alert_col, width="medium"),
+            code_col: st.column_config.TextColumn(code_col, width="small"),
+            name_col: st.column_config.TextColumn(name_col, width="medium"),
+            market_col: st.column_config.TextColumn(market_col, width="small"),
+            close_col: st.column_config.NumberColumn(close_col, format="%.2f"),
+            support_col: st.column_config.NumberColumn(support_col, format="%.2f"),
+            support_date_col: st.column_config.TextColumn(support_date_col, width="small"),
+            rebound_col: st.column_config.NumberColumn(rebound_col, format="%.2f"),
+            volume_col: st.column_config.NumberColumn(volume_col, format="%d"),
+            revenue_col: st.column_config.NumberColumn(revenue_col, format="%.2f"),
+            rev_month_col: st.column_config.TextColumn(rev_month_col, width="small"),
+            history_col: st.column_config.NumberColumn(history_col, format="%d"),
+        },
+    )
+
+
 if not run_btn:
     if "bottom_screener_result" in st.session_state:
         _r = st.session_state["bottom_screener_result"]
         st.info("💡 顯示上次選股結果。如需重新選股請點擊「開始選股」。")
         _disp = make_display_df(build_alert_flags(_r, rev_growth_min, rebound_max))
+        render_bottom_result_overview(_disp, f"{support_months} 個月")
         st.subheader(f"📋 底部剛起漲名單（共 {len(_disp)} 檔）")
         render_alert_summary(_disp)
-        st.dataframe(_disp, use_container_width=True, hide_index=True)
+        render_bottom_table(_disp)
         _csv = dataframe_to_csv_bytes(_disp)
         st.download_button(
             "⬇️ 下載 CSV（Excel 可直接開啟）", _csv,
@@ -720,26 +773,9 @@ except Exception:
     pass
 
 display_df = make_display_df(build_alert_flags(df_result, rev_growth_min, rebound_max))
+render_bottom_result_overview(display_df, f"{support_months} 個月")
 render_alert_summary(display_df)
-st.dataframe(
-    display_df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "警示標記": st.column_config.TextColumn("警示標記", width="medium"),
-        "股票代碼": st.column_config.TextColumn("股票代碼", width="small"),
-        "股票名稱": st.column_config.TextColumn("股票名稱", width="medium"),
-        "市場": st.column_config.TextColumn("市場", width="small"),
-        "收盤價(元)": st.column_config.NumberColumn("收盤價(元)", format="%.2f"),
-        "近半年支撐價(元)": st.column_config.NumberColumn("近半年支撐價(元)", format="%.2f"),
-        "支撐日期": st.column_config.TextColumn("支撐日期", width="small"),
-        "自底部漲幅(%)": st.column_config.NumberColumn("自底部漲幅(%)", format="%.2f"),
-        "前一日成交量(張)": st.column_config.NumberColumn("前一日成交量(張)", format="%d"),
-        "單月營收年增率(%)": st.column_config.NumberColumn("單月營收年增率(%)", format="%.2f"),
-        "最新營收年月": st.column_config.TextColumn("最新營收年月", width="small"),
-        "歷史交易日數": st.column_config.NumberColumn("歷史交易日數", format="%d"),
-    },
-)
+render_bottom_table(display_df)
 
 csv = dataframe_to_csv_bytes(display_df)
 st.download_button(

@@ -191,6 +191,54 @@ def render_chip_alert_summary(display_df: pd.DataFrame) -> None:
 # ─────────────────────────────────────────────
 # 說明頁 / 恢復上次結果
 # ─────────────────────────────────────────────
+def render_chip_result_overview(display_df: pd.DataFrame, window_label: str) -> None:
+    alert_col = "警示標記" if "警示標記" in display_df.columns else "霅衣內璅?"
+    if display_df.empty or alert_col not in display_df.columns:
+        return
+
+    alerts = display_df[alert_col].astype(str)
+    positive_count = alerts.str.contains("外資連買|籌碼加速|價量配合", regex=True).sum()
+    risk_count = alerts.str.contains("買盤鈍化|籌碼背離", regex=True).sum()
+    normal_count = (alerts == "正常").sum()
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("候選檔數", f"{len(display_df)} 檔")
+    col2.metric("正向訊號", int(positive_count))
+    col3.metric("風險訊號", int(risk_count))
+    col4.metric("正常觀察", int(normal_count), help=f"觀察區間：{window_label}")
+
+
+def render_chip_table(display_df: pd.DataFrame) -> None:
+    alert_col = "警示標記" if "警示標記" in display_df.columns else "霅衣內璅?"
+    code_col = "股票代碼" if "股票代碼" in display_df.columns else "?∠巨隞?Ⅳ"
+    name_col = "股票名稱" if "股票名稱" in display_df.columns else "?∠巨?迂"
+    market_col = "市場" if "市場" in display_df.columns else "撣"
+    close_col = "收盤價(元)" if "收盤價(元)" in display_df.columns else "?嗥????"
+    pe_col = "本益比(倍)" if "本益比(倍)" in display_df.columns else "?祉?瘥???"
+    pe_label_col = "PE口徑" if "PE口徑" in display_df.columns else "PE???"
+    foreign_col = "外資近N日買超(張)" if "外資近N日買超(張)" in display_df.columns else "憭?餈?亥眺頞?撘?"
+    streak_col = "連買天數" if "連買天數" in display_df.columns else "??眺憭拇"
+    volume_col = "當日成交量(張)" if "當日成交量(張)" in display_df.columns else "?嗆?漱??撘?"
+
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            alert_col: st.column_config.TextColumn(alert_col, width="medium"),
+            code_col: st.column_config.TextColumn(code_col, width="small"),
+            name_col: st.column_config.TextColumn(name_col, width="medium"),
+            market_col: st.column_config.TextColumn(market_col, width="small"),
+            close_col: st.column_config.NumberColumn(close_col, format="%.2f"),
+            pe_col: st.column_config.NumberColumn(pe_col, format="%.2f"),
+            pe_label_col: st.column_config.TextColumn(pe_label_col, width="medium"),
+            foreign_col: st.column_config.NumberColumn(foreign_col, format="%d"),
+            streak_col: st.column_config.NumberColumn(streak_col, format="%d"),
+            volume_col: st.column_config.NumberColumn(volume_col, format="%d"),
+        },
+    )
+
+
 if not run_btn:
     if "chip_screener_result" in st.session_state:
         _r = st.session_state["chip_screener_result"]
@@ -198,8 +246,9 @@ if not run_btn:
         _count = len(_r)
         st.subheader(f"📋 外資籌碼重壓名單（共 {_count} 檔）")
         _disp = make_chip_display_df(build_chip_alert_flags(_r))
+        render_chip_result_overview(_disp, f"{days_n} 日")
         render_chip_alert_summary(_disp)
-        st.dataframe(_disp, use_container_width=True, hide_index=True)
+        render_chip_table(_disp)
         _csv = dataframe_to_csv_bytes(_disp)
         st.download_button(
             "⬇️ 下載 CSV（Excel 可直接開啟）", _csv,
@@ -562,25 +611,9 @@ except Exception:
     pass
 
 display_df = make_chip_display_df(build_chip_alert_flags(df_result))
+render_chip_result_overview(display_df, f"{days_n} 日")
 render_chip_alert_summary(display_df)
-
-st.dataframe(
-    display_df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "警示標記":          st.column_config.TextColumn("警示標記", width="medium"),
-        "股票代碼":          st.column_config.TextColumn("股票代碼",   width="small"),
-        "股票名稱":          st.column_config.TextColumn("股票名稱",   width="medium"),
-        "市場":              st.column_config.TextColumn("市場",       width="small"),
-        "收盤價(元)":        st.column_config.NumberColumn("收盤價(元)",        format="%.2f"),
-        "本益比(倍)":        st.column_config.NumberColumn("本益比(倍)",        format="%.2f"),
-        "PE口徑":            st.column_config.TextColumn("PE口徑", width="medium"),
-        "外資近N日買超(張)": st.column_config.NumberColumn("外資近N日買超(張)", format="%d"),
-        "連買天數":          st.column_config.NumberColumn("連買天數", format="%d"),
-        "當日成交量(張)":    st.column_config.NumberColumn("當日成交量(張)",    format="%d"),
-    },
-)
+render_chip_table(display_df)
 
 csv_bytes = dataframe_to_csv_bytes(display_df)
 st.download_button(
