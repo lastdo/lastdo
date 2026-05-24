@@ -27,6 +27,38 @@ from _style import apply_style, page_header, render_global_navigation
 apply_style()
 page_header("🏦", "外資籌碼重壓選股器", "策略：外資籌碼重壓 ｜ 上市＋上櫃 ｜ 近N日外資累積買超為主篩條件")
 
+
+def render_page_positioning() -> None:
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(
+            """
+            **這頁看什麼**
+
+            觀察外資近 N 日是否持續集中買超，並篩出籌碼明顯往單一方向堆疊的股票。
+            """
+        )
+    with col2:
+        st.markdown(
+            """
+            **適合什麼情境**
+
+            適合用來找主力型買盤正在發生、且想先判斷籌碼是否延續或鈍化的情境。
+            """
+        )
+    with col3:
+        st.markdown(
+            """
+            **篩選風格**
+
+            邏輯屬於 **中性偏積極**，重視外資動能與市場承接，不是單純低估值撿便宜。
+            """
+        )
+
+
+render_page_positioning()
+st.caption("本頁重點是看外資籌碼有沒有持續集中、加速或背離，不等同底部型策略。")
+
 # ─────────────────────────────────────────────
 # 側邊欄
 # ─────────────────────────────────────────────
@@ -62,32 +94,161 @@ with st.sidebar:
     st.caption("📡 外資買賣超：TWSE + TPEX（免費）｜ 本益比：官方上市櫃 API")
     st.caption("📢 本系統僅供學術研究，不構成投資建議")
 
+
+def build_chip_alert_flags(result_df: pd.DataFrame) -> pd.DataFrame:
+    result_df = result_df.copy()
+
+    def _flags(row: pd.Series) -> str:
+        flags = []
+        foreign_total = pd.to_numeric(row.get("foreign_net_buy_lot"), errors="coerce")
+        recent3 = pd.to_numeric(row.get("foreign_buy_3d_lot"), errors="coerce")
+        prev3 = pd.to_numeric(row.get("foreign_buy_prev3d_lot"), errors="coerce")
+        latest1 = pd.to_numeric(row.get("foreign_buy_latest_lot"), errors="coerce")
+        streak = pd.to_numeric(row.get("foreign_buy_streak"), errors="coerce")
+        vol_lot = pd.to_numeric(row.get("vol_lot"), errors="coerce")
+
+        if pd.notna(streak) and streak >= 3:
+            flags.append("外資連買")
+
+        if (
+            pd.notna(recent3)
+            and recent3 > 0
+            and (
+                (pd.notna(prev3) and prev3 > 0 and recent3 >= prev3 * 1.2)
+                or (pd.notna(latest1) and pd.notna(foreign_total) and latest1 >= foreign_total * 0.35)
+            )
+        ):
+            flags.append("籌碼加速")
+
+        if (
+            pd.notna(latest1)
+            and pd.notna(vol_lot)
+            and vol_lot > 0
+            and latest1 > 0
+            and latest1 / vol_lot >= 0.08
+        ):
+            flags.append("價量配合")
+
+        if (
+            pd.notna(streak)
+            and streak >= 2
+            and pd.notna(recent3)
+            and pd.notna(prev3)
+            and prev3 > 0
+            and recent3 < prev3 * 0.8
+        ):
+            flags.append("買盤鈍化")
+
+        if (
+            pd.notna(foreign_total)
+            and foreign_total > 0
+            and pd.notna(latest1)
+            and latest1 < 0
+        ):
+            flags.append("籌碼背離")
+
+        return "｜".join(flags) if flags else "正常"
+
+    result_df["alert_flags"] = result_df.apply(_flags, axis=1)
+    return result_df
+
+
+def make_chip_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
+    display_df = result_df.rename(columns={
+        "alert_flags":         "警示標記",
+        "stock_id":            "股票代碼",
+        "stock_name":          "股票名稱",
+        "market":              "市場",
+        "close":               "收盤價(元)",
+        "vol_lot":             "當日成交量(張)",
+        "foreign_net_buy_lot": "外資近N日買超(張)",
+        "foreign_buy_streak":  "連買天數",
+        "pe_ratio":            "本益比(倍)",
+        "pe_label":            "PE口徑",
+    })[["警示標記", "股票代碼", "股票名稱", "市場", "收盤價(元)", "本益比(倍)", "PE口徑",
+        "外資近N日買超(張)", "連買天數", "當日成交量(張)"]].copy()
+
+    display_df["收盤價(元)"] = pd.to_numeric(display_df["收盤價(元)"], errors="coerce").round(2)
+    display_df["本益比(倍)"] = pd.to_numeric(display_df["本益比(倍)"], errors="coerce").round(2)
+    display_df["外資近N日買超(張)"] = pd.to_numeric(display_df["外資近N日買超(張)"], errors="coerce").round(0).astype(int)
+    display_df["連買天數"] = pd.to_numeric(display_df["連買天數"], errors="coerce").fillna(0).round(0).astype(int)
+    display_df["當日成交量(張)"] = pd.to_numeric(display_df["當日成交量(張)"], errors="coerce").round(0).astype(int)
+    return display_df.sort_values("收盤價(元)", ascending=False).reset_index(drop=True)
+
+
+def render_chip_alert_summary(display_df: pd.DataFrame) -> None:
+    if display_df.empty or "警示標記" not in display_df.columns:
+        return
+
+    flattened = "｜".join(display_df["警示標記"].astype(str).tolist())
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("外資連買", flattened.count("外資連買"))
+    col2.metric("籌碼加速", flattened.count("籌碼加速"))
+    col3.metric("價量配合", flattened.count("價量配合"))
+    col4.metric("買盤鈍化", flattened.count("買盤鈍化"))
+    col5.metric("籌碼背離", flattened.count("籌碼背離"))
+
 # ─────────────────────────────────────────────
 # 說明頁 / 恢復上次結果
 # ─────────────────────────────────────────────
+def render_chip_result_overview(display_df: pd.DataFrame, window_label: str) -> None:
+    alert_col = "警示標記" if "警示標記" in display_df.columns else "霅衣內璅?"
+    if display_df.empty or alert_col not in display_df.columns:
+        return
+
+    alerts = display_df[alert_col].astype(str)
+    positive_count = alerts.str.contains("外資連買|籌碼加速|價量配合", regex=True).sum()
+    risk_count = alerts.str.contains("買盤鈍化|籌碼背離", regex=True).sum()
+    normal_count = (alerts == "正常").sum()
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("候選檔數", f"{len(display_df)} 檔")
+    col2.metric("正向訊號", int(positive_count))
+    col3.metric("風險訊號", int(risk_count))
+    col4.metric("正常觀察", int(normal_count), help=f"觀察區間：{window_label}")
+
+
+def render_chip_table(display_df: pd.DataFrame) -> None:
+    alert_col = "警示標記" if "警示標記" in display_df.columns else "霅衣內璅?"
+    code_col = "股票代碼" if "股票代碼" in display_df.columns else "?∠巨隞?Ⅳ"
+    name_col = "股票名稱" if "股票名稱" in display_df.columns else "?∠巨?迂"
+    market_col = "市場" if "市場" in display_df.columns else "撣"
+    close_col = "收盤價(元)" if "收盤價(元)" in display_df.columns else "?嗥????"
+    pe_col = "本益比(倍)" if "本益比(倍)" in display_df.columns else "?祉?瘥???"
+    pe_label_col = "PE口徑" if "PE口徑" in display_df.columns else "PE???"
+    foreign_col = "外資近N日買超(張)" if "外資近N日買超(張)" in display_df.columns else "憭?餈?亥眺頞?撘?"
+    streak_col = "連買天數" if "連買天數" in display_df.columns else "??眺憭拇"
+    volume_col = "當日成交量(張)" if "當日成交量(張)" in display_df.columns else "?嗆?漱??撘?"
+
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            alert_col: st.column_config.TextColumn(alert_col, width="medium"),
+            code_col: st.column_config.TextColumn(code_col, width="small"),
+            name_col: st.column_config.TextColumn(name_col, width="medium"),
+            market_col: st.column_config.TextColumn(market_col, width="small"),
+            close_col: st.column_config.NumberColumn(close_col, format="%.2f"),
+            pe_col: st.column_config.NumberColumn(pe_col, format="%.2f"),
+            pe_label_col: st.column_config.TextColumn(pe_label_col, width="medium"),
+            foreign_col: st.column_config.NumberColumn(foreign_col, format="%d"),
+            streak_col: st.column_config.NumberColumn(streak_col, format="%d"),
+            volume_col: st.column_config.NumberColumn(volume_col, format="%d"),
+        },
+    )
+
+
 if not run_btn:
     if "chip_screener_result" in st.session_state:
         _r = st.session_state["chip_screener_result"]
         st.info("💡 顯示上次選股結果。如需重新選股請點擊「開始選股」。")
         _count = len(_r)
         st.subheader(f"📋 外資籌碼重壓名單（共 {_count} 檔）")
-        _disp = _r.rename(columns={
-            "stock_id":            "股票代碼",
-            "stock_name":          "股票名稱",
-            "market":              "市場",
-            "close":               "收盤價(元)",
-            "vol_lot":             "當日成交量(張)",
-            "foreign_net_buy_lot": "外資近N日買超(張)",
-            "pe_ratio":            "本益比(倍)",
-            "pe_label":            "PE口徑",
-        })[["股票代碼", "股票名稱", "市場", "收盤價(元)", "本益比(倍)", "PE口徑",
-            "外資近N日買超(張)", "當日成交量(張)"]]
-        _disp["收盤價(元)"]        = _disp["收盤價(元)"].round(2)
-        _disp["本益比(倍)"]        = pd.to_numeric(_disp["本益比(倍)"], errors="coerce").round(2)
-        _disp["外資近N日買超(張)"] = pd.to_numeric(_disp["外資近N日買超(張)"], errors="coerce").round(0).astype(int)
-        _disp["當日成交量(張)"]    = _disp["當日成交量(張)"].round(0).astype(int)
-        _disp = _disp.sort_values("收盤價(元)", ascending=False).reset_index(drop=True)
-        st.dataframe(_disp, use_container_width=True, hide_index=True)
+        _disp = make_chip_display_df(build_chip_alert_flags(_r))
+        render_chip_result_overview(_disp, f"{days_n} 日")
+        render_chip_alert_summary(_disp)
+        render_chip_table(_disp)
         _csv = dataframe_to_csv_bytes(_disp)
         st.download_button(
             "⬇️ 下載 CSV（Excel 可直接開啟）", _csv,
@@ -302,7 +463,9 @@ for _i in range(days_n + 15):   # 加足緩衝，防止連續假日
     if _df_tw.empty and _df_tp.empty:
         continue                    # 該日無資料（假日），跳過
     _valid_dates.append(_d)
-    _daily_frames.append(pd.concat([_df_tw, _df_tp], ignore_index=True))
+    _daily = pd.concat([_df_tw, _df_tp], ignore_index=True)
+    _daily["trade_date"] = _d.strftime("%Y-%m-%d")
+    _daily_frames.append(_daily)
     if len(_valid_dates) >= days_n:
         break
 
@@ -315,6 +478,35 @@ _df_inst_all = pd.concat(_daily_frames, ignore_index=True)
 _df_inst_sum = _df_inst_all.groupby("stock_id", as_index=False)["foreign_net_shares"].sum()
 _df_inst_sum["foreign_net_buy_lot"] = _df_inst_sum["foreign_net_shares"] / 1000  # 股 → 張
 
+_df_inst_all["trade_date"] = pd.to_datetime(_df_inst_all["trade_date"])
+_df_inst_all["foreign_net_buy_lot"] = pd.to_numeric(_df_inst_all["foreign_net_shares"], errors="coerce").fillna(0) / 1000
+
+
+def _chip_metrics(group: pd.DataFrame) -> pd.Series:
+    group = group.sort_values("trade_date", ascending=False).reset_index(drop=True)
+    values = group["foreign_net_buy_lot"].tolist()
+
+    streak = 0
+    for value in values:
+        if value > 0:
+            streak += 1
+        else:
+            break
+
+    recent3 = sum(values[:3]) if values else 0
+    prev3 = sum(values[3:6]) if len(values) > 3 else 0
+    latest1 = values[0] if values else 0
+
+    return pd.Series({
+        "foreign_buy_streak": streak,
+        "foreign_buy_3d_lot": recent3,
+        "foreign_buy_prev3d_lot": prev3,
+        "foreign_buy_latest_lot": latest1,
+    })
+
+
+_df_chip_metrics = _df_inst_all.groupby("stock_id").apply(_chip_metrics).reset_index()
+
 _inst_date0 = _valid_dates[-1].strftime("%Y-%m-%d") if _valid_dates else "-"
 _inst_date1 = _valid_dates[0].strftime("%Y-%m-%d")  if _valid_dates else "-"
 
@@ -325,6 +517,7 @@ progress.progress(55, text=f"🔧 外資資料已取得（{_inst_date0} ~ {_inst
 # Step 5：合併股價，套用外資買超條件
 # ─────────────────────────────────────────────
 df_merged = df_price_filtered.merge(_df_inst_sum[["stock_id", "foreign_net_buy_lot"]], on="stock_id", how="inner")
+df_merged = df_merged.merge(_df_chip_metrics, on="stock_id", how="left")
 _n_matched = len(df_merged)   # 合併後有多少檔（debug 用）
 df_candidates = df_merged[
     df_merged["foreign_net_buy_lot"] > foreign_buy_min
@@ -417,39 +610,10 @@ try:
 except Exception:
     pass
 
-display_df = df_result.rename(columns={
-    "stock_id":            "股票代碼",
-    "stock_name":          "股票名稱",
-    "market":              "市場",
-    "close":               "收盤價(元)",
-    "vol_lot":             "當日成交量(張)",
-    "foreign_net_buy_lot": "外資近N日買超(張)",
-    "pe_ratio":            "本益比(倍)",
-    "pe_label":            "PE口徑",
-})[["股票代碼", "股票名稱", "市場", "收盤價(元)", "本益比(倍)", "PE口徑",
-    "外資近N日買超(張)", "當日成交量(張)"]]
-
-display_df["收盤價(元)"]        = display_df["收盤價(元)"].round(2)
-display_df["本益比(倍)"]        = display_df["本益比(倍)"].round(2)
-display_df["外資近N日買超(張)"] = pd.to_numeric(display_df["外資近N日買超(張)"], errors="coerce").round(0).astype(int)
-display_df["當日成交量(張)"]    = display_df["當日成交量(張)"].round(0).astype(int)
-display_df = display_df.sort_values("收盤價(元)", ascending=False).reset_index(drop=True)
-
-st.dataframe(
-    display_df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "股票代碼":          st.column_config.TextColumn("股票代碼",   width="small"),
-        "股票名稱":          st.column_config.TextColumn("股票名稱",   width="medium"),
-        "市場":              st.column_config.TextColumn("市場",       width="small"),
-        "收盤價(元)":        st.column_config.NumberColumn("收盤價(元)",        format="%.2f"),
-        "本益比(倍)":        st.column_config.NumberColumn("本益比(倍)",        format="%.2f"),
-        "PE口徑":            st.column_config.TextColumn("PE口徑", width="medium"),
-        "外資近N日買超(張)": st.column_config.NumberColumn("外資近N日買超(張)", format="%d"),
-        "當日成交量(張)":    st.column_config.NumberColumn("當日成交量(張)",    format="%d"),
-    },
-)
+display_df = make_chip_display_df(build_chip_alert_flags(df_result))
+render_chip_result_overview(display_df, f"{days_n} 日")
+render_chip_alert_summary(display_df)
+render_chip_table(display_df)
 
 csv_bytes = dataframe_to_csv_bytes(display_df)
 st.download_button(

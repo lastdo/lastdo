@@ -20,6 +20,55 @@ from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse
 
 load_dotenv()
 
+
+def build_alert_flags(result_df: pd.DataFrame, rev_growth_floor: float, rebound_ceiling: float) -> pd.DataFrame:
+    result_df = result_df.copy()
+
+    def _flags(row: pd.Series) -> str:
+        flags = []
+        rev_yoy = pd.to_numeric(row.get("rev_yoy"), errors="coerce")
+        rebound_pct = pd.to_numeric(row.get("rebound_pct"), errors="coerce")
+        latest_hist_vol_lot = pd.to_numeric(row.get("latest_hist_vol_lot"), errors="coerce")
+        avg_vol_20 = pd.to_numeric(row.get("avg_vol_20"), errors="coerce")
+
+        if pd.notna(rebound_pct) and rebound_pct <= 3:
+            flags.append("貼近支撐")
+        elif pd.notna(rebound_pct) and rebound_pct <= 8:
+            flags.append("起漲初段")
+        elif pd.notna(rebound_pct) and rebound_pct >= max(rebound_ceiling - 3, rebound_ceiling * 0.8):
+            flags.append("空間縮小")
+
+        if pd.notna(rev_yoy) and rev_yoy < max(rev_growth_floor + 5, 10):
+            flags.append("營收轉弱")
+
+        if (
+            pd.notna(rebound_pct)
+            and rebound_pct > 3
+            and pd.notna(latest_hist_vol_lot)
+            and pd.notna(avg_vol_20)
+            and latest_hist_vol_lot < avg_vol_20
+        ):
+            flags.append("反彈無量")
+
+        return "｜".join(flags) if flags else "正常"
+
+    result_df["alert_flags"] = result_df.apply(_flags, axis=1)
+    return result_df
+
+
+def render_alert_summary(display_df: pd.DataFrame) -> None:
+    alert_col = "警示標記" if "警示標記" in display_df.columns else "霅衣內璅?"
+    if display_df.empty or alert_col not in display_df.columns:
+        return
+
+    flattened = "｜".join(display_df[alert_col].astype(str).tolist())
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("貼近支撐", flattened.count("貼近支撐"))
+    col2.metric("起漲初段", flattened.count("起漲初段"))
+    col3.metric("空間縮小", flattened.count("空間縮小"))
+    col4.metric("營收轉弱", flattened.count("營收轉弱"))
+    col5.metric("反彈無量", flattened.count("反彈無量"))
+
 # ─────────────────────────────────────────────
 # API 端點
 # ─────────────────────────────────────────────
@@ -40,6 +89,38 @@ from _style import apply_style, page_header, render_global_navigation
 
 apply_style()
 page_header("📈", "底部剛起漲選股器", "策略：近半年低點支撐 ｜ 漲幅未明顯 ｜ 營收年增為正")
+
+
+def render_page_positioning() -> None:
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(
+            """
+            **這頁看什麼**
+
+            找出近半年有明確支撐、股價剛離底不遠，且最新營收年增仍為正的股票。
+            """
+        )
+    with col2:
+        st.markdown(
+            """
+            **適合什麼情境**
+
+            適合想先找「底部整理後開始轉強」標的，再進一步做人手複核的情境。
+            """
+        )
+    with col3:
+        st.markdown(
+            """
+            **篩選風格**
+
+            邏輯屬於 **中性偏積極**，先過濾流動性與營收，再從底部型態中找起漲股。
+            """
+        )
+
+
+render_page_positioning()
+st.caption("本頁優先處理底部型態、營收動能與短線技術位階，不直接等於買進訊號。")
 
 # ─────────────────────────────────────────────
 # 側邊欄
@@ -134,6 +215,7 @@ def format_retry_at(seconds):
 # ─────────────────────────────────────────────
 def make_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
     _rename = {
+        "alert_flags": "警示標記",
         "stock_id": "股票代碼",
         "stock_name": "股票名稱",
         "market": "市場",
@@ -147,7 +229,7 @@ def make_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
         "history_days": "歷史交易日數",
     }
     _cols = [
-        "股票代碼", "股票名稱", "市場", "收盤價(元)", "近半年支撐價(元)", "支撐日期",
+        "警示標記", "股票代碼", "股票名稱", "市場", "收盤價(元)", "近半年支撐價(元)", "支撐日期",
         "自底部漲幅(%)", "前一日成交量(張)", "單月營收年增率(%)", "最新營收年月", "歷史交易日數",
     ]
     display_df = result_df.rename(columns=_rename)[_cols]
@@ -164,13 +246,67 @@ def make_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
+def render_bottom_result_overview(display_df: pd.DataFrame, support_window_label: str) -> None:
+    alert_col = "警示標記" if "警示標記" in display_df.columns else "霅衣內璅?"
+    if display_df.empty or alert_col not in display_df.columns:
+        return
+
+    alerts = display_df[alert_col].astype(str)
+    positive_count = alerts.str.contains("貼近支撐|起漲初段", regex=True).sum()
+    risk_count = alerts.str.contains("空間縮小|營收轉弱|反彈無量", regex=True).sum()
+    normal_count = (alerts == "正常").sum()
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("候選檔數", f"{len(display_df)} 檔")
+    col2.metric("正向訊號", int(positive_count))
+    col3.metric("風險訊號", int(risk_count))
+    col4.metric("正常觀察", int(normal_count), help=f"支撐區間：{support_window_label}")
+
+
+def render_bottom_table(display_df: pd.DataFrame) -> None:
+    alert_col = "警示標記" if "警示標記" in display_df.columns else "霅衣內璅?"
+    code_col = "股票代碼" if "股票代碼" in display_df.columns else "?∠巨隞?Ⅳ"
+    name_col = "股票名稱" if "股票名稱" in display_df.columns else "?∠巨?迂"
+    market_col = "市場" if "市場" in display_df.columns else "撣"
+    close_col = "收盤價(元)" if "收盤價(元)" in display_df.columns else "?嗥????"
+    support_col = "近半年支撐價(元)" if "近半年支撐價(元)" in display_df.columns else "餈?撟湔?(??"
+    support_date_col = "支撐日期" if "支撐日期" in display_df.columns else "?舀??交?"
+    rebound_col = "自底部漲幅(%)" if "自底部漲幅(%)" in display_df.columns else "?芸??冽撞撟?%)"
+    volume_col = "前一日成交量(張)" if "前一日成交量(張)" in display_df.columns else "???交?鈭日?(撘?"
+    revenue_col = "單月營收年增率(%)" if "單月營收年增率(%)" in display_df.columns else "?格??撟游???%)"
+    rev_month_col = "最新營收年月" if "最新營收年月" in display_df.columns else "??啁??嗅僑??"
+    history_col = "歷史交易日數" if "歷史交易日數" in display_df.columns else "甇瑕鈭斗??交"
+
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            alert_col: st.column_config.TextColumn(alert_col, width="medium"),
+            code_col: st.column_config.TextColumn(code_col, width="small"),
+            name_col: st.column_config.TextColumn(name_col, width="medium"),
+            market_col: st.column_config.TextColumn(market_col, width="small"),
+            close_col: st.column_config.NumberColumn(close_col, format="%.2f"),
+            support_col: st.column_config.NumberColumn(support_col, format="%.2f"),
+            support_date_col: st.column_config.TextColumn(support_date_col, width="small"),
+            rebound_col: st.column_config.NumberColumn(rebound_col, format="%.2f"),
+            volume_col: st.column_config.NumberColumn(volume_col, format="%d"),
+            revenue_col: st.column_config.NumberColumn(revenue_col, format="%.2f"),
+            rev_month_col: st.column_config.TextColumn(rev_month_col, width="small"),
+            history_col: st.column_config.NumberColumn(history_col, format="%d"),
+        },
+    )
+
+
 if not run_btn:
     if "bottom_screener_result" in st.session_state:
         _r = st.session_state["bottom_screener_result"]
         st.info("💡 顯示上次選股結果。如需重新選股請點擊「開始選股」。")
-        _disp = make_display_df(_r)
+        _disp = make_display_df(build_alert_flags(_r, rev_growth_min, rebound_max))
+        render_bottom_result_overview(_disp, f"{support_months} 個月")
         st.subheader(f"📋 底部剛起漲名單（共 {len(_disp)} 檔）")
-        st.dataframe(_disp, use_container_width=True, hide_index=True)
+        render_alert_summary(_disp)
+        render_bottom_table(_disp)
         _csv = dataframe_to_csv_bytes(_disp)
         st.download_button(
             "⬇️ 下載 CSV（Excel 可直接開啟）", _csv,
@@ -286,12 +422,15 @@ def get_finmind_last_yr_eps(symbol: str, token: str = "") -> float | None:
 def calc_bottom_support(row: pd.Series, history_df: pd.DataFrame):
     if history_df.empty or len(history_df) < 60:
         return None
+    history_df = history_df.sort_values("date").reset_index(drop=True).copy()
+    history_df["vol_lot_hist"] = pd.to_numeric(history_df["volume"], errors="coerce") / 1000
     low_idx = history_df["low"].idxmin()
     support_price = float(history_df.loc[low_idx, "low"])
     if support_price <= 0:
         return None
     latest_close = float(row["close"])
     rebound_pct = (latest_close / support_price - 1) * 100
+    latest_row = history_df.iloc[-1]
     return {
         "stock_id": row["stock_id"],
         "stock_name": row["stock_name"],
@@ -306,7 +445,57 @@ def calc_bottom_support(row: pd.Series, history_df: pd.DataFrame):
         "support_date": history_df.loc[low_idx, "date"].strftime("%Y-%m-%d"),
         "rebound_pct": rebound_pct,
         "history_days": len(history_df),
+        "avg_vol_20": float(history_df["vol_lot_hist"].tail(20).mean()) if history_df["vol_lot_hist"].tail(20).notna().any() else None,
+        "latest_hist_vol_lot": float(latest_row["vol_lot_hist"]) if pd.notna(latest_row["vol_lot_hist"]) else None,
     }
+
+
+def build_alert_flags(result_df: pd.DataFrame, rev_growth_floor: float, rebound_ceiling: float) -> pd.DataFrame:
+    result_df = result_df.copy()
+
+    def _flags(row: pd.Series) -> str:
+        flags = []
+        rev_yoy = pd.to_numeric(row.get("rev_yoy"), errors="coerce")
+        rebound_pct = pd.to_numeric(row.get("rebound_pct"), errors="coerce")
+        latest_hist_vol_lot = pd.to_numeric(row.get("latest_hist_vol_lot"), errors="coerce")
+        avg_vol_20 = pd.to_numeric(row.get("avg_vol_20"), errors="coerce")
+
+        if pd.notna(rebound_pct) and rebound_pct <= 3:
+            flags.append("貼近支撐")
+        elif pd.notna(rebound_pct) and rebound_pct <= 8:
+            flags.append("起漲初段")
+        elif pd.notna(rebound_pct) and rebound_pct >= max(rebound_ceiling - 3, rebound_ceiling * 0.8):
+            flags.append("空間縮小")
+
+        if pd.notna(rev_yoy) and rev_yoy < max(rev_growth_floor + 5, 10):
+            flags.append("營收轉弱")
+
+        if (
+            pd.notna(rebound_pct)
+            and rebound_pct > 3
+            and pd.notna(latest_hist_vol_lot)
+            and pd.notna(avg_vol_20)
+            and latest_hist_vol_lot < avg_vol_20
+        ):
+            flags.append("反彈無量")
+
+        return "｜".join(flags) if flags else "正常"
+
+    result_df["alert_flags"] = result_df.apply(_flags, axis=1)
+    return result_df
+
+
+def render_alert_summary(display_df: pd.DataFrame) -> None:
+    if display_df.empty or "警示標記" not in display_df.columns:
+        return
+
+    flattened = "｜".join(display_df["警示標記"].astype(str).tolist())
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("貼近支撐", flattened.count("貼近支撐"))
+    col2.metric("起漲初段", flattened.count("起漲初段"))
+    col3.metric("空間縮小", flattened.count("空間縮小"))
+    col4.metric("營收轉弱", flattened.count("營收轉弱"))
+    col5.metric("反彈無量", flattened.count("反彈無量"))
 
 
 # ─────────────────────────────────────────────
@@ -547,8 +736,9 @@ with st.expander("🔎 篩選流程診斷", expanded=False):
     _diag = df_support[[
         "stock_id", "stock_name", "market", "close", "support_price", "support_date",
         "rebound_pct", "vol_lot", "rev_yoy", "rev_ym", "history_days",
+        "avg_vol_20", "latest_hist_vol_lot",
     ]].copy()
-    _diag = make_display_df(_diag)
+    _diag = make_display_df(build_alert_flags(_diag, rev_growth_min, rebound_max))
     st.caption("以下為已成功計算近半年支撐價的股票，包含未通過起漲幅條件者。")
     st.dataframe(_diag, use_container_width=True, hide_index=True)
 
@@ -559,7 +749,11 @@ if count == 0:
     _near = df_support.sort_values(["close", "rebound_pct"], ascending=[False, True]).head(20)
     if not _near.empty:
         st.caption("以下為距離底部支撐較近的前 20 檔（供調整條件參考）：")
-        st.dataframe(make_display_df(_near), use_container_width=True, hide_index=True)
+        st.dataframe(
+            make_display_df(build_alert_flags(_near, rev_growth_min, rebound_max)),
+            use_container_width=True,
+            hide_index=True,
+        )
     st.stop()
 
 st.subheader(f"📋 底部剛起漲名單（共 {count} 檔，以收盤價降冪排序）")
@@ -578,25 +772,10 @@ try:
 except Exception:
     pass
 
-display_df = make_display_df(df_result)
-st.dataframe(
-    display_df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "股票代碼": st.column_config.TextColumn("股票代碼", width="small"),
-        "股票名稱": st.column_config.TextColumn("股票名稱", width="medium"),
-        "市場": st.column_config.TextColumn("市場", width="small"),
-        "收盤價(元)": st.column_config.NumberColumn("收盤價(元)", format="%.2f"),
-        "近半年支撐價(元)": st.column_config.NumberColumn("近半年支撐價(元)", format="%.2f"),
-        "支撐日期": st.column_config.TextColumn("支撐日期", width="small"),
-        "自底部漲幅(%)": st.column_config.NumberColumn("自底部漲幅(%)", format="%.2f"),
-        "前一日成交量(張)": st.column_config.NumberColumn("前一日成交量(張)", format="%d"),
-        "單月營收年增率(%)": st.column_config.NumberColumn("單月營收年增率(%)", format="%.2f"),
-        "最新營收年月": st.column_config.TextColumn("最新營收年月", width="small"),
-        "歷史交易日數": st.column_config.NumberColumn("歷史交易日數", format="%d"),
-    },
-)
+display_df = make_display_df(build_alert_flags(df_result, rev_growth_min, rebound_max))
+render_bottom_result_overview(display_df, f"{support_months} 個月")
+render_alert_summary(display_df)
+render_bottom_table(display_df)
 
 csv = dataframe_to_csv_bytes(display_df)
 st.download_button(

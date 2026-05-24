@@ -39,6 +39,38 @@ from _style import apply_style, page_header, render_global_navigation
 apply_style()
 page_header("📈", "成長股篩選", "從營收成長、成交量、股價與官方本益比找出合理估值的成長股。")
 
+
+def render_page_positioning() -> None:
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(
+            """
+            **這頁看什麼**
+
+            找出營收趨勢仍在延續、估值尚未完全失控，且股價沒有過度透支基本面的成長型股票。
+            """
+        )
+    with col2:
+        st.markdown(
+            """
+            **適合什麼情境**
+
+            適合先從基本面動能中找方向，再檢查估值與價格位置是否仍有中期跟漲空間。
+            """
+        )
+    with col3:
+        st.markdown(
+            """
+            **篩選風格**
+
+            邏輯屬於 **中性偏積極**，重視趨勢延續與估值紀律，不是單看單月營收爆發。
+            """
+        )
+
+
+render_page_positioning()
+st.caption("本頁優先判斷成長趨勢是否延續、價格是否先跑，避免把單月營收異常當成成長確認。")
+
 # ------------------------------
 # 側邊欄條件
 # ------------------------------
@@ -71,6 +103,146 @@ with st.sidebar:
     st.caption("資料來源：本益比來自官方上市櫃 API。")
     st.caption("本工具僅供研究參考，投資前請自行評估風險。")
 
+def build_growth_alert_flags(result_df: pd.DataFrame, pe_limit: float, rev_floor: float) -> pd.DataFrame:
+    result_df = result_df.copy()
+
+    def _flags(row: pd.Series) -> str:
+        flags = []
+        avg_rev_yoy = pd.to_numeric(row.get("avg_rev_yoy"), errors="coerce")
+        latest_rev_yoy = pd.to_numeric(row.get("latest_rev_yoy"), errors="coerce")
+        prev_rev_yoy = pd.to_numeric(row.get("prev_rev_yoy"), errors="coerce")
+        pe_ratio = pd.to_numeric(row.get("pe_ratio"), errors="coerce")
+        season_line_premium = pd.to_numeric(row.get("season_line_premium"), errors="coerce")
+
+        if (
+            pd.notna(avg_rev_yoy)
+            and pd.notna(latest_rev_yoy)
+            and pd.notna(prev_rev_yoy)
+            and avg_rev_yoy >= max(rev_floor + 10, 30)
+            and latest_rev_yoy > 0
+            and prev_rev_yoy > 0
+            and abs(latest_rev_yoy - prev_rev_yoy) <= 20
+        ):
+            flags.append("趨勢續強")
+
+        if (
+            pd.notna(latest_rev_yoy)
+            and pd.notna(prev_rev_yoy)
+            and abs(latest_rev_yoy - prev_rev_yoy) >= 35
+        ):
+            flags.append("成長失真")
+
+        if (
+            pd.notna(avg_rev_yoy)
+            and avg_rev_yoy >= max(rev_floor, 20)
+            and pd.notna(pe_ratio)
+            and pe_ratio >= max(pe_limit * 0.75, 18)
+        ):
+            flags.append("獲利未跟上")
+
+        if (
+            pd.notna(pe_ratio)
+            and pe_ratio >= max(pe_limit * 0.9, 18)
+            and pd.notna(avg_rev_yoy)
+            and pe_ratio > avg_rev_yoy * 0.8
+        ):
+            flags.append("估值過熱")
+
+        if (
+            pd.notna(season_line_premium)
+            and season_line_premium >= 0.08
+            and pd.notna(latest_rev_yoy)
+            and pd.notna(prev_rev_yoy)
+            and latest_rev_yoy <= prev_rev_yoy + 5
+        ):
+            flags.append("價格領先")
+
+        return "｜".join(flags) if flags else "正常"
+
+    result_df["alert_flags"] = result_df.apply(_flags, axis=1)
+    return result_df
+
+
+def make_growth_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
+    display_df = result_df.rename(columns={
+        "alert_flags": "警示標記",
+        "stock_id": "股票代號",
+        "stock_name": "股票名稱",
+        "market": "市場",
+        "close": "收盤價",
+        "pe_ratio": "本益比",
+        "pe_label": "PE口徑",
+        "vol_lot": "成交量(張)",
+        "avg_rev_yoy": "近2月平均營收年增(%)",
+        "rev_months": "營收月份",
+        "rev_cur": "當月營收",
+        "rev_ly": "去年同月營收",
+        "rev_ym": "最新營收月份",
+    })[[
+        "警示標記", "股票代號", "股票名稱", "市場", "收盤價", "本益比", "PE口徑",
+        "近2月平均營收年增(%)", "營收月份", "成交量(張)", "當月營收", "去年同月營收", "最新營收月份",
+    ]].copy()
+
+    display_df["收盤價"] = pd.to_numeric(display_df["收盤價"], errors="coerce").round(2)
+    display_df["本益比"] = pd.to_numeric(display_df["本益比"], errors="coerce").round(2)
+    display_df["近2月平均營收年增(%)"] = pd.to_numeric(display_df["近2月平均營收年增(%)"], errors="coerce").round(2)
+    display_df["成交量(張)"] = pd.to_numeric(display_df["成交量(張)"], errors="coerce").fillna(0).round(0).astype(int)
+    display_df["當月營收"] = pd.to_numeric(display_df["當月營收"], errors="coerce").fillna(0).round(0).astype(int)
+    display_df["去年同月營收"] = pd.to_numeric(display_df["去年同月營收"], errors="coerce").fillna(0).round(0).astype(int)
+    return display_df.sort_values("收盤價", ascending=False).reset_index(drop=True)
+
+
+def render_growth_alert_summary(display_df: pd.DataFrame) -> None:
+    if display_df.empty or "警示標記" not in display_df.columns:
+        return
+
+    flattened = "｜".join(display_df["警示標記"].astype(str).tolist())
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("趨勢續強", flattened.count("趨勢續強"))
+    col2.metric("成長失真", flattened.count("成長失真"))
+    col3.metric("獲利未跟上", flattened.count("獲利未跟上"))
+    col4.metric("估值過熱", flattened.count("估值過熱"))
+    col5.metric("價格領先", flattened.count("價格領先"))
+
+
+def render_growth_result_overview(display_df: pd.DataFrame, data_month: str) -> None:
+    if display_df.empty or "警示標記" not in display_df.columns:
+        return
+
+    alerts = display_df["警示標記"].astype(str)
+    positive_count = alerts.str.contains("趨勢續強", regex=False).sum()
+    risk_count = alerts.str.contains("成長失真|獲利未跟上|估值過熱|價格領先", regex=True).sum()
+    normal_count = (alerts == "正常").sum()
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("候選檔數", f"{len(display_df)} 檔")
+    col2.metric("正向訊號", int(positive_count))
+    col3.metric("風險訊號", int(risk_count))
+    col4.metric("正常觀察", int(normal_count), help=f"最新營收月份：{data_month or '-'}")
+
+
+def render_growth_table(display_df: pd.DataFrame) -> None:
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "警示標記": st.column_config.TextColumn("警示標記", width="medium"),
+            "股票代號": st.column_config.TextColumn("股票代號", width="small"),
+            "股票名稱": st.column_config.TextColumn("股票名稱", width="medium"),
+            "市場": st.column_config.TextColumn("市場", width="small"),
+            "收盤價": st.column_config.NumberColumn("收盤價", format="%.2f"),
+            "本益比": st.column_config.NumberColumn("本益比", format="%.2f"),
+            "PE口徑": st.column_config.TextColumn("PE口徑", width="medium"),
+            "近2月平均營收年增(%)": st.column_config.NumberColumn("近2月平均營收年增(%)", format="%.2f%%"),
+            "營收月份": st.column_config.TextColumn("營收月份", width="medium"),
+            "成交量(張)": st.column_config.NumberColumn("成交量(張)", format="%d"),
+            "當月營收": st.column_config.NumberColumn("當月營收", format="%d"),
+            "去年同月營收": st.column_config.NumberColumn("去年同月營收", format="%d"),
+        },
+    )
+
+
 # ------------------------------
 # 初始畫面 / 顯示上次結果
 # ------------------------------
@@ -82,37 +254,17 @@ if not run_btn:
         _count = len(_r)
         _rev_ym = _r["rev_ym"].iloc[0] if _count > 0 else "-"
         st.subheader(f"成長股策略結果：{_count} 檔（最新營收月份：{_rev_ym}）")
-        try:
-            _price_date_raw = _r.attrs.get("price_date", "") if hasattr(_r, "attrs") else ""
-        except Exception:
-            _price_date_raw = ""
-        _disp = _r.rename(columns={
-            "stock_id": "股票代號",
-            "stock_name": "股票名稱",
-            "market": "市場",
-            "close": "收盤價",
-            "pe_ratio": "本益比",
-            "pe_label": "PE口徑",
-            "vol_lot": "成交量(張)",
-            "avg_rev_yoy": "近2月平均營收年增(%)",
-            "rev_months": "營收月份",
-            "rev_cur": "當月營收",
-            "rev_ly": "去年同月營收",
-            "rev_ym": "最新營收月份",
-        })[["股票代號","股票名稱","市場","收盤價","本益比","PE口徑",
-            "近2月平均營收年增(%)","營收月份","成交量(張)",
-            "當月營收","去年同月營收","最新營收月份"]]
-        _disp["收盤價"] = _disp["收盤價"].round(2)
-        _disp["本益比"] = _disp["本益比"].round(2)
-        _disp["近2月平均營收年增(%)"] = _disp["近2月平均營收年增(%)"].round(2)
-        _disp["成交量(張)"] = _disp["成交量(張)"].round(0).astype(int)
-        _disp["當月營收"] = pd.to_numeric(_disp["當月營收"], errors="coerce").fillna(0).round(0).astype(int)
-        _disp["去年同月營收"] = pd.to_numeric(_disp["去年同月營收"], errors="coerce").fillna(0).round(0).astype(int)
-        _disp = _disp.sort_values("收盤價", ascending=False).reset_index(drop=True)
-        st.dataframe(_disp, use_container_width=True, hide_index=True)
+        _disp = make_growth_display_df(build_growth_alert_flags(_r, pe_max, rev_growth_min))
+        render_growth_result_overview(_disp, _rev_ym)
+        render_growth_alert_summary(_disp)
+        render_growth_table(_disp)
         _csv = dataframe_to_csv_bytes(_disp)
-        st.download_button("下載 CSV", _csv,
-            f"growth_screener_{datetime.today().strftime('%Y%m%d')}.csv", "text/csv")
+        st.download_button(
+            "下載 CSV",
+            _csv,
+            f"成長股篩選_{datetime.today().strftime('%Y%m%d')}.csv",
+            "text/csv",
+        )
         st.stop()
     st.info("請先在左側設定篩選條件，然後點擊執行。")
     with st.expander("查看篩選條件與計算說明", expanded=True):
@@ -303,9 +455,19 @@ df_rev_avg = df_rev_top2.groupby("stock_id", as_index=False).agg(
 )
 # 保留每檔股票最新一筆營收，並合併近 2 月平均營收年增資訊。
 df_rev_latest = df_rev_s.groupby("stock_id", as_index=False).first()
+df_rev_recent = (
+    df_rev_top2.sort_values(["stock_id", "rev_ym"], ascending=[True, False])
+    .groupby("stock_id")
+    .agg(
+        latest_rev_yoy=("rev_yoy", "first"),
+        prev_rev_yoy=("rev_yoy", lambda x: x.iloc[1] if len(x) > 1 else x.iloc[0]),
+    )
+    .reset_index()
+)
 df_rev_final = df_rev_latest.merge(
     df_rev_avg[["stock_id", "avg_rev_yoy", "rev_months"]], on="stock_id", how="left"
 )
+df_rev_final = df_rev_final.merge(df_rev_recent, on="stock_id", how="left")
 
 # ------------------------------
 # Step 4：依營收、成交量、股價做初步篩選
@@ -362,12 +524,14 @@ if df_result.empty:
         )
     st.stop()
 
-# 最後才查季線，讓 FinMind 股價查詢量降到最小。
 progress.progress(94, text=f"查詢季線條件（FinMind，{len(df_result)} 檔）...")
 ma60_results = df_result["stock_id"].apply(lambda sid: get_finmind_ma60(sid, finmind_token))
 df_result["ma60"] = ma60_results.apply(lambda x: x[0])
 df_result["ma60_status"] = ma60_results.apply(lambda x: x[1])
 df_result["ma60_msg"] = ma60_results.apply(lambda x: x[2])
+df_result["season_line_premium"] = (
+    (pd.to_numeric(df_result["close"], errors="coerce") / pd.to_numeric(df_result["ma60"], errors="coerce")) - 1
+)
 
 ma60_rate_limited = df_result["ma60_status"].isin([402, 403, 429]).sum()
 if ma60_rate_limited > 0:
@@ -426,57 +590,16 @@ try:
 except Exception:
     pass
 
-display_df = df_result.rename(columns={
-    "stock_id": "股票代號",
-    "stock_name": "股票名稱",
-    "market": "市場",
-    "close": "收盤價",
-    "pe_ratio": "本益比",
-    "pe_label": "PE口徑",
-    "vol_lot": "成交量(張)",
-    "avg_rev_yoy": "近2月平均營收年增(%)",
-    "rev_months": "營收月份",
-    "rev_cur": "當月營收",
-    "rev_ly": "去年同月營收",
-    "rev_ym": "最新營收月份",
-})[[
-    "股票代號", "股票名稱", "市場", "收盤價", "本益比", "PE口徑",
-    "近2月平均營收年增(%)", "營收月份", "成交量(張)",
-    "當月營收", "去年同月營收", "最新營收月份",
-]]
-
-display_df["收盤價"] = display_df["收盤價"].round(2)
-display_df["本益比"] = display_df["本益比"].round(2)
-display_df["近2月平均營收年增(%)"] = display_df["近2月平均營收年增(%)"].round(2)
-display_df["成交量(張)"] = display_df["成交量(張)"].round(0).astype(int)
-display_df["當月營收"] = pd.to_numeric(display_df["當月營收"], errors="coerce").fillna(0).round(0).astype(int)
-display_df["去年同月營收"] = pd.to_numeric(display_df["去年同月營收"], errors="coerce").fillna(0).round(0).astype(int)
-display_df = display_df.sort_values("收盤價", ascending=False).reset_index(drop=True)
-
-st.dataframe(
-    display_df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "股票代號": st.column_config.TextColumn("股票代號", width="small"),
-        "股票名稱": st.column_config.TextColumn("股票名稱", width="medium"),
-        "市場": st.column_config.TextColumn("市場", width="small"),
-        "收盤價": st.column_config.NumberColumn("收盤價", format="%.2f"),
-        "本益比": st.column_config.NumberColumn("本益比", format="%.2f"),
-        "PE口徑": st.column_config.TextColumn("PE口徑", width="medium"),
-        "近2月平均營收年增(%)": st.column_config.NumberColumn("近2月平均營收年增(%)", format="%.2f%%"),
-        "營收月份": st.column_config.TextColumn("營收月份", width="medium"),
-        "成交量(張)": st.column_config.NumberColumn("成交量(張)", format="%d"),
-        "當月營收": st.column_config.NumberColumn("當月營收", format="%d"),
-        "去年同月營收": st.column_config.NumberColumn("去年同月營收", format="%d"),
-    },
-)
+display_df = make_growth_display_df(build_growth_alert_flags(df_result, pe_max, rev_growth_min))
+render_growth_result_overview(display_df, rev_ym)
+render_growth_alert_summary(display_df)
+render_growth_table(display_df)
 
 csv_bytes = dataframe_to_csv_bytes(display_df)
 st.download_button(
     label="下載 CSV",
     data=csv_bytes,
-    file_name=f"growth_screener_{datetime.today().strftime('%Y%m%d')}.csv",
+    file_name=f"成長股篩選_{datetime.today().strftime('%Y%m%d')}.csv",
     mime="text/csv",
 )
 
