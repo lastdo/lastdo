@@ -1,11 +1,11 @@
-import requests
 import streamlit as st
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pandas as pd
 import plotly.express as px
 
-from _app_common import FINMIND_URL, configure_runtime
+from _app_common import configure_runtime
+from _market_api import fetch_json_tpex, fetch_json_twse
 from _portfolio_store import (
     create_portfolio_item,
     delete_portfolio_item,
@@ -21,54 +21,106 @@ configure_runtime()
 
 BROKER_FEE_RATE = 0.001425
 STOCK_SELL_TAX_RATE = 0.003
+URL_TWSE_PRICE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 
-@st.cache_data(ttl=3600)
-def fetch_all_stock_names() -> dict:
+
+def _parse_market_number(value):
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", "")
+    if text in {"", "--", "---", "----", "X", "除權息"}:
+        return None
     try:
-        resp = requests.get(FINMIND_URL, params={"dataset": "TaiwanStockInfo"}, timeout=15)
-        result = resp.json()
-        if result.get("status") == 200 and result.get("data"):
-            return {row["stock_id"]: row.get("stock_name", "") for row in result["data"]}
-    except Exception:
-        pass
-    return {}
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _normalize_price_date(raw_value) -> str:
+    text = str(raw_value or "").strip()
+    if not text:
+        return datetime.today().strftime("%Y-%m-%d")
+    if len(text) == 7 and text.isdigit():
+        year = int(text[:3]) + 1911
+        return f"{year:04d}-{text[3:5]}-{text[5:7]}"
+    if len(text) == 8 and text.isdigit():
+        return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+    if "/" in text:
+        parts = text.split("/")
+        if len(parts) == 3 and all(part.isdigit() for part in parts):
+            year = int(parts[0])
+            if year < 1911:
+                year += 1911
+            return f"{year:04d}-{int(parts[1]):02d}-{int(parts[2]):02d}"
+    return text
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_recent_stock_price(symbol: str) -> dict:
-    end_date = datetime.today().date()
-    start_date = end_date - timedelta(days=21)
-    params = {
-        "dataset": "TaiwanStockPrice",
-        "data_id": symbol,
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-    }
+def fetch_market_snapshot() -> dict:
+    snapshot: dict[str, dict] = {}
+
     try:
-        resp = requests.get(FINMIND_URL, params=params, timeout=15)
-        resp.raise_for_status()
-        result = resp.json()
-        if result.get("status") != 200 or not result.get("data"):
-            return {}
+        raw_twse = fetch_json_twse(URL_TWSE_PRICE)
+        twse_date = _normalize_price_date(raw_twse[0].get("Date") if raw_twse else None)
+        df_twse = pd.DataFrame(raw_twse)
+        if {"Code", "Name", "ClosingPrice"}.issubset(df_twse.columns):
+            for row in df_twse.to_dict("records"):
+                stock_id = str(row.get("Code", "")).strip()
+                close_price = _parse_market_number(row.get("ClosingPrice"))
+                change_value = _parse_market_number(row.get("Change"))
+                previous_price = close_price - change_value if close_price is not None and change_value is not None else None
+                if stock_id:
+                    snapshot[stock_id] = {
+                        "stock_name": str(row.get("Name", "")).strip(),
+                        "latest_price": close_price,
+                        "previous_price": previous_price,
+                        "price_date": twse_date,
+                    }
+    except Exception:
+        pass
 
-        df = pd.DataFrame(result["data"])
-        if df.empty or "close" not in df.columns:
-            return {}
-        df["date"] = pd.to_datetime(df["date"])
-        df["close"] = pd.to_numeric(df["close"], errors="coerce")
-        df = df.dropna(subset=["close"]).sort_values("date")
-        if df.empty:
-            return {}
+    try:
+        raw_tpex = fetch_json_tpex(URL_TPEX_PRICE)
+        tpex_date = _normalize_price_date(raw_tpex[0].get("Date") if raw_tpex else None)
+        df_tpex = pd.DataFrame(raw_tpex)
+        if {"SecuritiesCompanyCode", "CompanyName", "Close"}.issubset(df_tpex.columns):
+            for row in df_tpex.to_dict("records"):
+                stock_id = str(row.get("SecuritiesCompanyCode", "")).strip()
+                close_price = _parse_market_number(row.get("Close"))
+                change_value = _parse_market_number(
+                    row.get("Change")
+                    or row.get("Spread")
+                    or row.get("PriceChange")
+                )
+                previous_price = close_price - change_value if close_price is not None and change_value is not None else None
+                if stock_id:
+                    snapshot[stock_id] = {
+                        "stock_name": str(row.get("CompanyName", "")).strip(),
+                        "latest_price": close_price,
+                        "previous_price": previous_price,
+                        "price_date": tpex_date,
+                    }
+    except Exception:
+        pass
 
-        latest = df.iloc[-1]
-        previous = df.iloc[-2] if len(df) >= 2 else None
-        latest_price = float(latest["close"])
-        previous_price = float(previous["close"]) if previous is not None else None
+    return snapshot
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_all_stock_names() -> dict:
+    try:
         return {
-            "latest_price": latest_price,
-            "previous_price": previous_price,
-            "price_date": latest["date"].strftime("%Y-%m-%d"),
+            stock_id: info.get("stock_name", "")
+            for stock_id, info in fetch_market_snapshot().items()
         }
+    except Exception:
+        return {}
+
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_recent_stock_price(symbol: str) -> dict:
+    try:
+        return fetch_market_snapshot().get(symbol, {})
     except Exception:
         return {}
 
@@ -187,6 +239,13 @@ def format_money(value, digits: int = 0) -> str:
     return f"NT$ {value:,.{digits}f}"
 
 
+def format_signed_money(value, digits: int = 0) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    sign = "+" if value > 0 else ""
+    return f"{sign}NT$ {value:,.{digits}f}"
+
+
 def format_pct(value) -> str:
     if value is None or pd.isna(value):
         return "—"
@@ -202,7 +261,7 @@ def pnl_class(value) -> str:
 def pnl_color_style(value) -> str:
     if value is None or pd.isna(value) or value == 0:
         return ""
-    return "color: var(--accent-risk); font-weight: 700;" if value > 0 else "color: var(--accent-positive); font-weight: 700;"
+    return "color: #dc2626; font-weight: 700;" if value > 0 else "color: #16a34a; font-weight: 700;"
 
 
 def estimate_fee(amount, rate: float) -> int | None:
@@ -463,22 +522,19 @@ else:
     else:
         display_holding_df = holding_df.copy()
         display_holding_df = display_holding_df.sort_values("market_value", ascending=False, na_position="last")
-        raw_holding_df = display_holding_df.copy()
         display_holding_df["股票"] = display_holding_df["symbol"] + " " + display_holding_df["name"].fillna("")
-        display_holding_df["持有成本"] = display_holding_df["cost_price"].map(lambda x: format_money(x, 2))
-        display_holding_df["股數"] = display_holding_df["shares"].map(lambda x: f"{int(x):,} 股" if pd.notna(x) else "—")
-        display_holding_df["最新價"] = display_holding_df["latest_price"].map(lambda x: format_money(x, 2))
-        display_holding_df["投入成本"] = display_holding_df["invested_cost"].map(format_money)
-        display_holding_df["目前市值"] = display_holding_df["market_value"].map(format_money)
-        display_holding_df["毛損益"] = display_holding_df["gross_unrealized_pnl"].map(format_money)
-        display_holding_df["賣出手續費"] = display_holding_df["sell_fee"].map(format_money)
-        display_holding_df["交易稅"] = display_holding_df["sell_tax"].map(format_money)
-        display_holding_df["未實現損益"] = display_holding_df["unrealized_pnl"].map(format_money)
-        display_holding_df["未實現報酬率"] = display_holding_df["unrealized_return"].map(format_pct)
-        display_holding_df["今日損益"] = display_holding_df["today_pnl"].map(format_money)
-        display_holding_df["持倉比例"] = display_holding_df["position_ratio"].map(
-            lambda x: f"{x:.2f}%" if pd.notna(x) else "—"
-        )
+        display_holding_df["持有成本"] = display_holding_df["cost_price"]
+        display_holding_df["股數"] = display_holding_df["shares"]
+        display_holding_df["最新價"] = display_holding_df["latest_price"]
+        display_holding_df["投入成本"] = display_holding_df["invested_cost"]
+        display_holding_df["目前市值"] = display_holding_df["market_value"]
+        display_holding_df["毛損益"] = display_holding_df["gross_unrealized_pnl"]
+        display_holding_df["賣出手續費"] = display_holding_df["sell_fee"]
+        display_holding_df["交易稅"] = display_holding_df["sell_tax"]
+        display_holding_df["未實現損益"] = display_holding_df["unrealized_pnl"]
+        display_holding_df["未實現報酬率"] = display_holding_df["unrealized_return"]
+        display_holding_df["今日損益"] = display_holding_df["today_pnl"]
+        display_holding_df["持倉比例"] = display_holding_df["position_ratio"]
         display_holding_df["價格日"] = display_holding_df["price_date"].replace("", "—")
         display_columns = [
             "股票",
@@ -496,21 +552,34 @@ else:
             "持倉比例",
             "價格日",
         ]
-        styled_holding_df = display_holding_df[display_columns].style
+        styled_holding_df = display_holding_df[display_columns].style.format({
+            "持有成本": lambda x: format_money(x, 2),
+            "股數": lambda x: f"{int(x):,} 股" if pd.notna(x) else "—",
+            "最新價": lambda x: format_money(x, 2),
+            "投入成本": format_money,
+            "目前市值": format_money,
+            "毛損益": format_signed_money,
+            "賣出手續費": format_money,
+            "交易稅": format_money,
+            "未實現損益": format_signed_money,
+            "未實現報酬率": format_pct,
+            "今日損益": format_signed_money,
+            "持倉比例": lambda x: f"{x:.2f}%" if pd.notna(x) else "—",
+        })
         styled_holding_df = styled_holding_df.apply(
-            lambda col: [pnl_color_style(v) for v in raw_holding_df["gross_unrealized_pnl"]],
+            lambda col: [pnl_color_style(v) for v in display_holding_df["gross_unrealized_pnl"]],
             subset=["毛損益"],
         )
         styled_holding_df = styled_holding_df.apply(
-            lambda col: [pnl_color_style(v) for v in raw_holding_df["unrealized_pnl"]],
+            lambda col: [pnl_color_style(v) for v in display_holding_df["unrealized_pnl"]],
             subset=["未實現損益"],
         )
         styled_holding_df = styled_holding_df.apply(
-            lambda col: [pnl_color_style(v) for v in raw_holding_df["unrealized_return"]],
+            lambda col: [pnl_color_style(v) for v in display_holding_df["unrealized_return"]],
             subset=["未實現報酬率"],
         )
         styled_holding_df = styled_holding_df.apply(
-            lambda col: [pnl_color_style(v) for v in raw_holding_df["today_pnl"]],
+            lambda col: [pnl_color_style(v) for v in display_holding_df["today_pnl"]],
             subset=["今日損益"],
         )
         st.dataframe(
