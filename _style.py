@@ -1,20 +1,44 @@
-"""共用商業風格樣式模組 — 所有頁面 import 後呼叫 apply_style() 即可套用"""
+"""Shared visual styling and sidebar navigation helpers."""
 import streamlit as st
 
 
 _CSS = """
 <style>
-/* ── 背景 ── */
-.stApp { background: #f0f4f8; }
+:root {
+    --bg-app: #f3f6f8;
+    --bg-surface: #ffffff;
+    --bg-sidebar: #1f2d3d;
+    --bg-sidebar-input: #132033;
+    --bg-header-start: #102033;
+    --bg-header-mid: #1d3f62;
+    --bg-header-end: #1f5fd6;
+    --text-primary: #132033;
+    --text-secondary: #516173;
+    --text-muted: #8a99ab;
+    --text-on-dark: #eef4fb;
+    --text-on-header: #ffffff;
+    --accent-primary: #2563eb;
+    --accent-primary-soft: #dbeafe;
+    --accent-positive: #18804b;
+    --accent-positive-soft: #dcfce7;
+    --accent-risk: #d92d20;
+    --accent-risk-soft: #fee2e2;
+    --accent-warn: #c77700;
+    --accent-neutral: #5b6b7c;
+    --border-default: #d9e2ec;
+    --shadow-soft: 0 2px 10px rgba(15, 23, 42, 0.08);
+    --shadow-hero: 0 8px 32px rgba(15, 23, 42, 0.24);
+}
 
-/* ── 頁首橫幅 ── */
+.stApp { background: var(--bg-app); }
+
 .page-header,
 .inv-header {
-    background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 55%, #1d4ed8 100%);
+    background: linear-gradient(135deg, var(--bg-header-start) 0%, var(--bg-header-mid) 55%, var(--bg-header-end) 100%);
     border-radius: 16px;
     padding: 28px 36px;
     margin-bottom: 22px;
-    box-shadow: 0 8px 32px rgba(15,23,42,0.25);
+    box-shadow: var(--shadow-hero);
     display: flex;
     align-items: center;
     gap: 20px;
@@ -24,55 +48,58 @@ _CSS = """
 .page-header h1,
 .inv-header h1 {
     margin: 0 0 5px;
-    color: #ffffff;
+    color: var(--text-on-header);
     font-size: 1.75rem;
     font-weight: 800;
     letter-spacing: -0.3px;
 }
 .page-header p,
-.inv-header p { margin: 0; color: #93c5fd; font-size: 0.86rem; }
+.inv-header p { margin: 0; color: #bfdbfe; font-size: 0.86rem; }
 
-/* ── 白色卡片容器 ── */
 .card {
-    background: #ffffff;
+    background: var(--bg-surface);
     border-radius: 12px;
     padding: 22px 24px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.07);
-    border: 1px solid #e2e8f0;
+    box-shadow: var(--shadow-soft);
+    border: 1px solid var(--border-default);
     margin-bottom: 16px;
 }
 
-/* ── 統計卡片 ── */
 .stat-card {
-    background: #ffffff;
+    background: var(--bg-surface);
     border-radius: 12px;
     padding: 20px 22px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.07);
-    border-top: 4px solid #2563eb;
+    box-shadow: var(--shadow-soft);
+    border-top: 4px solid var(--accent-primary);
     height: 100%;
 }
-.stat-card.c-blue   { border-color: #2563eb; }
-.stat-card.c-green  { border-color: #16a34a; }
+.stat-card.c-blue   { border-color: var(--accent-primary); }
+.stat-card.c-green  { border-color: var(--accent-positive); }
 .stat-card.c-purple { border-color: #7c3aed; }
-.stat-card.c-red    { border-color: #dc2626; }
-.stat-card.c-amber  { border-color: #d97706; }
-.stat-card.c-slate  { border-color: #475569; }
-.stat-label { color: #64748b; font-size: 0.74rem; font-weight: 700;
-              text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 8px; }
-.stat-value { color: #0f172a; font-size: 1.65rem; font-weight: 800; }
-.stat-sub   { color: #94a3b8; font-size: 0.77rem; margin-top: 4px; }
-.stat-value.pos { color: #dc2626; }
-.stat-value.neg { color: #16a34a; }
+.stat-card.c-red    { border-color: var(--accent-risk); }
+.stat-card.c-amber  { border-color: var(--accent-warn); }
+.stat-card.c-slate  { border-color: var(--accent-neutral); }
+.stat-label {
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-bottom: 8px;
+}
+.stat-value { color: var(--text-primary); font-size: 1.65rem; font-weight: 800; }
+.stat-sub   { color: var(--text-muted); font-size: 0.77rem; margin-top: 4px; }
+.stat-value.pos { color: var(--accent-risk); }
+.stat-value.neg { color: var(--accent-positive); }
 
-/* ── 小節標題線 ── */
 .section-title,
 .form-section-title {
     font-size: 0.93rem;
     font-weight: 700;
-    color: #1e293b;
+    color: var(--text-primary);
     margin: 20px 0 8px;
     padding-left: 10px;
-    border-left: 3px solid #2563eb;
+    border-left: 3px solid var(--accent-primary);
 }
 
 .status-badge {
@@ -82,13 +109,12 @@ _CSS = """
     font-size: 0.72rem;
     font-weight: 800;
 }
-.status-badge.holding { background: #fee2e2; color: #b91c1c; }
-.status-badge.watch { background: #e0f2fe; color: #0369a1; }
+.status-badge.holding { background: var(--accent-risk-soft); color: #b42318; }
+.status-badge.watch { background: var(--accent-primary-soft); color: #0b5ed7; }
 
-/* ── 表格標題列 ── */
 .table-header,
 .list-header {
-    background: #1e293b;
+    background: var(--bg-sidebar);
     border-radius: 10px 10px 0 0;
     padding: 11px 16px;
     margin-bottom: 2px;
@@ -97,12 +123,17 @@ _CSS = """
     gap: 8px;
 }
 .table-header span,
-.list-header span { color: #94a3b8; font-size: 0.77rem; font-weight: 700;
-                     text-transform: uppercase; letter-spacing: 0.07em; }
+.list-header span {
+    color: var(--text-muted);
+    font-size: 0.77rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+}
 .table-header .th-badge,
 .list-header .lh-count {
-    background: #2563eb;
-    color: #fff;
+    background: var(--accent-primary);
+    color: var(--text-on-header);
     border-radius: 20px;
     padding: 1px 10px;
     font-size: 0.74rem;
@@ -110,23 +141,21 @@ _CSS = """
     margin-left: auto;
 }
 
-/* ── 欄標題 ── */
 .col-hdr {
-    color: #94a3b8;
+    color: var(--text-muted);
     font-size: 0.71rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     padding: 10px 0 4px;
-    border-bottom: 1px solid #e2e8f0;
+    border-bottom: 1px solid var(--border-default);
     margin-bottom: 6px;
 }
 
-/* ── 代碼徽章 ── */
 .sym-badge {
     display: inline-block;
-    background: #dbeafe;
-    color: #1d4ed8;
+    background: var(--accent-primary-soft);
+    color: var(--bg-header-end);
     border-radius: 8px;
     padding: 4px 12px;
     font-size: 1.1rem;
@@ -134,48 +163,44 @@ _CSS = """
     letter-spacing: 1px;
 }
 .stock-name-text {
-    color: #334155;
+    color: var(--text-secondary);
     font-size: 0.92rem;
     font-weight: 600;
     margin-top: 4px;
 }
 
-/* ── 數值欄 ── */
-.val-main  { color: #0f172a; font-size: 0.95rem; font-weight: 700; }
-.val-label { color: #94a3b8; font-size: 0.71rem; margin-top: 2px; }
-.val-pos   { color: #16a34a; font-weight: 700; }
-.val-neg   { color: #dc2626; font-weight: 700; }
+.val-main  { color: var(--text-primary); font-size: 0.95rem; font-weight: 700; }
+.val-label { color: var(--text-muted); font-size: 0.71rem; margin-top: 2px; }
+.val-pos   { color: var(--accent-positive); font-weight: 700; }
+.val-neg   { color: var(--accent-risk); font-weight: 700; }
 
 .row-divider {
     border: none;
-    border-top: 1px solid #f1f5f9;
+    border-top: 1px solid #edf2f7;
     margin: 4px 0;
 }
 
-/* ── 空狀態 ── */
 .empty-state {
     text-align: center;
     padding: 64px 20px;
-    background: #ffffff;
+    background: var(--bg-surface);
     border-radius: 12px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+    box-shadow: var(--shadow-soft);
 }
 .empty-state .es-icon { font-size: 3.5rem; }
-.empty-state h3 { color: #475569; margin: 14px 0 6px; font-size: 1.1rem; }
-.empty-state p  { color: #94a3b8; font-size: 0.87rem; }
+.empty-state h3 { color: var(--accent-neutral); margin: 14px 0 6px; font-size: 1.1rem; }
+.empty-state p  { color: var(--text-muted); font-size: 0.87rem; }
 
-/* ── 表單容器 ── */
 div[data-testid="stForm"] {
-    background: #ffffff;
+    background: var(--bg-surface);
     border-radius: 12px;
     padding: 20px 20px 12px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.07);
-    border: 1px solid #e2e8f0;
+    box-shadow: var(--shadow-soft);
+    border: 1px solid var(--border-default);
 }
 
-/* ── 主要按鈕 ── */
 .stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, #1d4ed8, #3b82f6) !important;
+    background: linear-gradient(135deg, var(--bg-header-end), #4f8df7) !important;
     border: none !important;
     border-radius: 8px !important;
     font-weight: 600 !important;
@@ -188,38 +213,35 @@ div[data-testid="stForm"] {
     box-shadow: 0 4px 14px rgba(37,99,235,0.45) !important;
 }
 
-/* ── 次要 / 危險按鈕 ── */
 .stButton > button[kind="secondary"] {
     border-radius: 8px !important;
     transition: all 0.18s ease !important;
 }
 
-/* ── 側邊欄美化 ── */
 section[data-testid="stSidebar"] {
-    background: #1e293b !important;
+    background: var(--bg-sidebar) !important;
 }
 section[data-testid="stSidebar"] * {
-    color: #e2e8f0 !important;
+    color: var(--text-on-dark) !important;
 }
 section[data-testid="stSidebar"] .stTextInput input,
 section[data-testid="stSidebar"] .stNumberInput input,
 section[data-testid="stSidebar"] .stSelectbox select,
 section[data-testid="stSidebar"] .stDateInput input {
-    background: #0f172a !important;
-    border-color: #334155 !important;
-    color: #f1f5f9 !important;
+    background: var(--bg-sidebar-input) !important;
+    border-color: #3a4b5d !important;
+    color: var(--text-on-dark) !important;
     border-radius: 8px !important;
 }
 section[data-testid="stSidebar"] h1,
 section[data-testid="stSidebar"] h2,
 section[data-testid="stSidebar"] h3 {
-    color: #ffffff !important;
+    color: var(--text-on-header) !important;
 }
 section[data-testid="stSidebar"] hr {
-    border-color: #334155 !important;
+    border-color: #3a4b5d !important;
 }
 
-/* ── 隱藏 Streamlit 預設頁尾裝飾 ── */
 #MainMenu, footer { visibility: hidden; }
 div[data-testid="stDecoration"] { display: none; }
 div[data-testid="stSidebarNav"] { display: none; }
@@ -228,13 +250,14 @@ div[data-testid="stSidebarNav"] { display: none; }
 
 
 def apply_style():
-    """注入全域商業風格 CSS，應在 st.set_page_config 之後立即呼叫。"""
+    """Inject the shared app CSS after st.set_page_config."""
     st.markdown(_CSS, unsafe_allow_html=True)
 
 
 def page_header(icon: str, title: str, subtitle: str = ""):
-    """渲染深藍漸層頁首橫幅。"""
-    st.markdown(f"""
+    """Render the shared page header banner."""
+    st.markdown(
+        f"""
 <div class="page-header">
     <div class="page-header-icon">{icon}</div>
     <div>
@@ -242,7 +265,9 @@ def page_header(icon: str, title: str, subtitle: str = ""):
         <p>{subtitle}</p>
     </div>
 </div>
-""", unsafe_allow_html=True)
+""",
+        unsafe_allow_html=True,
+    )
 
 
 def render_global_navigation(current_page: str) -> None:

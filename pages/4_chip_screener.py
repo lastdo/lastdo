@@ -57,6 +57,18 @@ def render_page_positioning() -> None:
 
 
 render_page_positioning()
+
+
+def render_strategy_card() -> None:
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("策略核心", "外資集中")
+    col2.metric("觀察區間", "近 N 日")
+    col3.metric("資料主體", "官方 API")
+    col4.metric("判讀重點", "連買與背離")
+    st.caption("先確認外資是否持續買超，再觀察買盤有沒有加速、鈍化，或出現價量背離。")
+
+
+render_strategy_card()
 st.caption("本頁重點是看外資籌碼有沒有持續集中、加速或背離，不等同底部型策略。")
 
 # ─────────────────────────────────────────────
@@ -67,11 +79,13 @@ with st.sidebar:
     st.markdown("---")
     st.header("⚙️ 選股條件")
     st.divider()
+    st.markdown("**觀察區間**")
 
     days_n = int(st.number_input(
         "近 N 日（交易日）", value=3, min_value=1, max_value=30, step=1,
         help="統計最近 N 個交易日的外資累積買超",
     ))
+    st.markdown("**核心條件**")
     foreign_buy_min = st.number_input(
         "外資累積買超 大於（張）", value=3000, min_value=0, step=100,
         help="近N日外資累積淨買超（買-賣），單位：張（1張=1000股）",
@@ -83,6 +97,7 @@ with st.sidebar:
     price_min = st.number_input("股價 大於（元）", value=50.0, min_value=0.0, step=5.0)
     vol_min   = st.number_input("當日成交量 大於（張）", value=1000, min_value=0, step=100)
 
+    st.markdown("**操作**")
     run_btn = st.button("🔍 開始選股", use_container_width=True, type="primary")
     if st.button("🗑️ 清除快取（強制重新抓資料）", use_container_width=True):
         st.session_state.pop("chip_screener_result", None)
@@ -90,6 +105,7 @@ with st.sidebar:
         st.stop()
 
     st.markdown("---")
+    st.markdown("**資料來源**")
     st.caption("📡 股價：TWSE + TPEX OpenAPI（免費）")
     st.caption("📡 外資買賣超：TWSE + TPEX（免費）｜ 本益比：官方上市櫃 API")
     st.caption("📢 本系統僅供學術研究，不構成投資建議")

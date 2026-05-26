@@ -82,11 +82,11 @@ st.markdown("""
 
 /* ── 頁首橫幅 ── */
 .inv-header {
-    background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 55%, #1d4ed8 100%);
+    background: linear-gradient(135deg, var(--bg-header-start) 0%, var(--bg-header-mid) 55%, var(--bg-header-end) 100%);
     border-radius: 16px;
     padding: 30px 36px;
     margin-bottom: 20px;
-    box-shadow: 0 8px 32px rgba(15,23,42,0.25);
+    box-shadow: var(--shadow-hero);
     display: flex;
     align-items: center;
     gap: 20px;
@@ -94,34 +94,34 @@ st.markdown("""
 .inv-header-icon { font-size: 3rem; line-height: 1; }
 .inv-header h1 {
     margin: 0 0 6px;
-    color: #ffffff;
+    color: var(--text-on-header);
     font-size: 1.85rem;
     font-weight: 800;
     letter-spacing: -0.3px;
 }
-.inv-header p { margin: 0; color: #93c5fd; font-size: 0.88rem; }
+.inv-header p { margin: 0; color: #bfdbfe; font-size: 0.88rem; }
 
 /* ── 統計卡片 ── */
 .stat-card {
-    background: #ffffff;
+    background: var(--bg-surface);
     border-radius: 12px;
     padding: 20px 22px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+    box-shadow: var(--shadow-soft);
     border-top: 4px solid;
     height: 100%;
 }
-.stat-card.c-blue   { border-color: #2563eb; }
-.stat-card.c-green  { border-color: #16a34a; }
+.stat-card.c-blue   { border-color: var(--accent-primary); }
+.stat-card.c-green  { border-color: var(--accent-positive); }
 .stat-card.c-purple { border-color: #7c3aed; }
-.stat-card.c-red    { border-color: #dc2626; }
-.stat-card.c-amber  { border-color: #d97706; }
-.stat-card.c-slate  { border-color: #475569; }
-.stat-label { color: #64748b; font-size: 0.75rem; font-weight: 700;
+.stat-card.c-red    { border-color: var(--accent-risk); }
+.stat-card.c-amber  { border-color: var(--accent-warn); }
+.stat-card.c-slate  { border-color: var(--accent-neutral); }
+.stat-label { color: var(--text-secondary); font-size: 0.75rem; font-weight: 700;
               text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 8px; }
-.stat-value { color: #0f172a; font-size: 1.7rem; font-weight: 800; }
-.stat-sub   { color: #94a3b8; font-size: 0.78rem; margin-top: 4px; }
-.stat-value.pos { color: #dc2626; }
-.stat-value.neg { color: #16a34a; }
+.stat-value { color: var(--text-primary); font-size: 1.7rem; font-weight: 800; }
+.stat-sub   { color: var(--text-muted); font-size: 0.78rem; margin-top: 4px; }
+.stat-value.pos { color: var(--accent-risk); }
+.stat-value.neg { color: var(--accent-positive); }
 
 /* ── 新增表單標題 ── */
 /* ── 表單容器美化 ── */
@@ -130,8 +130,8 @@ st.markdown("""
 /* ── 股票代碼標籤 ── */
 .sym-badge {
     display: inline-block;
-    background: #dbeafe;
-    color: #1d4ed8;
+    background: var(--accent-primary-soft);
+    color: var(--bg-header-end);
     border-radius: 8px;
     padding: 4px 12px;
     font-size: 1.15rem;
@@ -139,8 +139,8 @@ st.markdown("""
     letter-spacing: 1px;
 }
 /* ── 數值欄 ── */
-.val-main  { color: #0f172a; font-size: 1rem; font-weight: 700; }
-.val-label { color: #94a3b8; font-size: 0.72rem; margin-top: 2px; }
+.val-main  { color: var(--text-primary); font-size: 1rem; font-weight: 700; }
+.val-label { color: var(--text-muted); font-size: 0.72rem; margin-top: 2px; }
 
 /* ── 隔線每行 ── */
 /* ── 空狀態 ── */
@@ -148,14 +148,14 @@ st.markdown("""
 /* ── 刪除按鈕（secondary） ── */
 .stButton > button[kind="secondary"] {
     border-radius: 8px !important;
-    border-color: #fca5a5 !important;
-    color: #dc2626 !important;
+    border-color: #f1a9a0 !important;
+    color: var(--accent-risk) !important;
     background: #fff5f5 !important;
     transition: all 0.18s ease !important;
 }
 .stButton > button[kind="secondary"]:hover {
-    background: #fee2e2 !important;
-    border-color: #dc2626 !important;
+    background: var(--accent-risk-soft) !important;
+    border-color: var(--accent-risk) !important;
 }
 
 /* ── 隱藏預設 Streamlit 頁尾 ── */
@@ -202,7 +202,7 @@ def pnl_class(value) -> str:
 def pnl_color_style(value) -> str:
     if value is None or pd.isna(value) or value == 0:
         return ""
-    return "color: #dc2626; font-weight: 700;" if value > 0 else "color: #16a34a; font-weight: 700;"
+    return "color: var(--accent-risk); font-weight: 700;" if value > 0 else "color: var(--accent-positive); font-weight: 700;"
 
 
 def estimate_fee(amount, rate: float) -> int | None:
@@ -420,7 +420,7 @@ if not holding_df.empty and holding_df["market_value"].notna().any():
     chart_df = chart_df.sort_values("position_ratio", ascending=True)
     chart_df["ratio_label"] = chart_df["position_ratio"].map(lambda x: f"{x:.1f}%")
     chart_df["bar_color"] = chart_df["unrealized_pnl"].apply(
-        lambda value: "#dc2626" if pd.notna(value) and value > 0 else "#16a34a"
+        lambda value: "#d92d20" if pd.notna(value) and value > 0 else "#18804b"
     )
     fig = px.bar(
         chart_df,
@@ -436,8 +436,8 @@ if not holding_df.empty and holding_df["market_value"].notna().any():
     fig.update_traces(textposition="outside", cliponaxis=False)
     fig.update_layout(
         margin=dict(l=10, r=60, t=24, b=10),
-        plot_bgcolor="#ffffff",
-        paper_bgcolor="#ffffff",
+        plot_bgcolor="white",
+        paper_bgcolor="white",
         showlegend=False,
     )
     st.plotly_chart(fig, use_container_width=True)
@@ -560,7 +560,7 @@ else:
 
         c0, c1, c2, c3, c4, c5 = st.columns([0.4, 1.1, 1.7, 1.0, 2.5, 2.7])
         with c0:
-            st.markdown(f"<div style='color:#cbd5e1;font-size:0.8rem;padding-top:10px;text-align:center'>{i+1}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='color:var(--text-muted);font-size:0.8rem;padding-top:10px;text-align:center'>{i+1}</div>", unsafe_allow_html=True)
         with c1:
             st.markdown(f"<div style='padding-top:6px'><span class='sym-badge'>{symbol}</span></div>", unsafe_allow_html=True)
         with c2:

@@ -71,6 +71,18 @@ def render_page_positioning() -> None:
 render_page_positioning()
 st.caption("本頁優先判斷成長趨勢是否延續、價格是否先跑，避免把單月營收異常當成成長確認。")
 
+
+def render_strategy_card() -> None:
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("策略核心", "成長延續")
+    col2.metric("價格紀律", f"季線溢價 < {SEASON_LINE_MAX_PREMIUM * 100:.0f}%")
+    col3.metric("資料主體", "官方 API")
+    col4.metric("最終驗證", "FinMind 季線")
+    st.caption("先用官方營收、成交量、股價與 PE 做主篩，再用季線限制避免價格過度透支。")
+
+
+render_strategy_card()
+
 # ------------------------------
 # 側邊欄條件
 # ------------------------------
@@ -80,6 +92,7 @@ with st.sidebar:
     st.header("篩選條件")
     st.divider()
 
+    st.markdown("**資料設定**")
     finmind_token = st.text_input(
         "FinMind Token（選填）",
         value=os.getenv("FINMIND_TOKEN", ""),
@@ -87,11 +100,13 @@ with st.sidebar:
         help="僅用於查詢季線（MA60）；本益比改採官方上市櫃API。",
     ).strip()
 
+    st.markdown("**核心條件**")
     pe_max = st.number_input("本益比上限（倍）", value=20.0, min_value=1.0, max_value=500.0, step=1.0)
     rev_growth_min = st.number_input("近 2 月平均營收年增下限 (%)", value=20.0, min_value=-100.0, max_value=1000.0, step=1.0)
     vol_min = st.number_input("成交量下限（張）", value=1000, min_value=0, step=100)
     price_min = st.number_input("股價下限（元）", value=50.0, min_value=0.0, step=5.0)
 
+    st.markdown("**操作**")
     run_btn = st.button("執行篩選", use_container_width=True, type="primary")
     if st.button("清除快取並重新整理", use_container_width=True):
         st.session_state.pop("screener_result", None)
@@ -99,6 +114,7 @@ with st.sidebar:
         st.stop()
 
     st.markdown("---")
+    st.markdown("**資料來源**")
     st.caption("資料來源：股價 / 營收來自 TWSE + TPEX OpenAPI。")
     st.caption("資料來源：本益比來自官方上市櫃 API。")
     st.caption("本工具僅供研究參考，投資前請自行評估風險。")

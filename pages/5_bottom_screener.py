@@ -120,6 +120,18 @@ def render_page_positioning() -> None:
 
 
 render_page_positioning()
+
+
+def render_strategy_card() -> None:
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("策略核心", "貼底轉強")
+    col2.metric("支撐區間", "近半年低點")
+    col3.metric("資料主體", "官方 + FinMind")
+    col4.metric("判讀重點", "空間與量能")
+    st.caption("先確認股價仍貼近支撐，再看營收是否維持正向，最後檢查反彈是否有量能配合。")
+
+
+render_strategy_card()
 st.caption("本頁優先處理底部型態、營收動能與短線技術位階，不直接等於買進訊號。")
 
 # ─────────────────────────────────────────────
@@ -130,7 +142,7 @@ with st.sidebar:
     st.markdown("---")
     st.header("⚙️ 選股條件")
     st.divider()
-
+    st.markdown("**資料設定**")
     finmind_token = st.text_input(
         "FinMind Token（選填）",
         value=os.getenv("FINMIND_TOKEN", ""),
@@ -138,6 +150,7 @@ with st.sidebar:
         help="用於查詢通過前置條件股票的近半年歷史股價；估值改採官方上市櫃API。",
     ).strip()
 
+    st.markdown("**核心條件**")
     support_months = int(st.number_input(
         "底部觀察月數", value=6, min_value=3, max_value=12, step=1,
         help="用近 N 個月最低價作為底部支撐價格。",
@@ -158,6 +171,7 @@ with st.sidebar:
         "股價 大於（元）", value=100.0, min_value=0.0, step=5.0,
         help="先剔除 100 元以下股票，降低低價股造成的候選數量。",
     )
+    st.markdown("**操作**")
     run_btn = st.button("🔍 開始選股", use_container_width=True, type="primary")
     if st.button("🗑️ 清除快取（強制重新抓資料）", use_container_width=True):
         st.session_state.pop("bottom_screener_result", None)
@@ -165,6 +179,7 @@ with st.sidebar:
         st.stop()
 
     st.markdown("---")
+    st.markdown("**資料來源**")
     st.caption("📡 股價/月營收：TWSE + TPEX OpenAPI（免費）")
     st.caption("📡 近半年歷史股價：FinMind TaiwanStockPrice（三線程查詢）")
     st.caption("📡 本益比：官方上市櫃 API")
