@@ -113,7 +113,14 @@ def _load_local_portfolio() -> list[dict[str, Any]]:
     with open(PORTFOLIO_FILE, "r", encoding="utf-8") as file:
         raw_items = json.load(file)
 
-    return [normalize_portfolio_item(item) for item in raw_items]
+    normalized_items = [normalize_portfolio_item(item) for item in raw_items]
+
+    # Backfill legacy local portfolio rows so row_id/family metadata stay stable
+    # across reruns; otherwise update/delete actions can point at transient ids.
+    if raw_items != normalized_items:
+        _save_local_portfolio(normalized_items)
+
+    return normalized_items
 
 
 def _save_local_portfolio(items: list[dict[str, Any]]) -> None:
@@ -271,11 +278,21 @@ def load_portfolio(family_id: str) -> list[dict[str, Any]]:
         rows.sort(key=lambda item: (item["stock_id"], item["created_at"]))
         return rows
 
-    return [
-        normalize_portfolio_item(item, family_id=family_id)
-        for item in _load_local_portfolio()
-        if not normalize_portfolio_item(item, family_id=family_id)["is_deleted"]
-    ]
+    rows = []
+    normalized_items = []
+    updated = False
+    for item in _load_local_portfolio():
+        normalized = normalize_portfolio_item(item, family_id=family_id)
+        normalized_items.append(normalized)
+        if normalized["family_id"] != item.get("family_id", "").strip():
+            updated = True
+        if not normalized["is_deleted"]:
+            rows.append(normalized)
+
+    if updated:
+        _save_local_portfolio(normalized_items)
+
+    return rows
 
 
 def create_portfolio_item(
@@ -340,8 +357,11 @@ def update_portfolio_item(row_id: str, family_id: str, avg_cost=None, shares=Non
     for item in items:
         normalized = normalize_portfolio_item(item, family_id=family_id)
         if normalized["row_id"] == row_id:
-            item["price"] = _to_float(avg_cost)
+            new_avg_cost = _to_float(avg_cost)
+            item["price"] = new_avg_cost
+            item["avg_cost"] = new_avg_cost
             item["shares"] = _to_int(shares)
+            item["family_id"] = family_id
             item["updated_at"] = _utc_now()
             matched = True
             break
