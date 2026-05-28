@@ -1,5 +1,6 @@
 import pandas as pd
 
+from _market_data import build_public_pe_snapshot
 from _market_api import fetch_json_tpex, fetch_json_twse
 
 
@@ -10,52 +11,17 @@ PUBLIC_PE_LABEL = "官方上市櫃API（近四季EPS反推）"
 
 def fetch_public_pe_ratios() -> pd.DataFrame:
     """Fetch official TWSE/TPEX PE ratios and normalize to a single schema."""
-    frames = []
-
     try:
         raw_twse = fetch_json_twse(URL_TWSE_PE)
-        df_twse = pd.DataFrame(raw_twse)
-        if {"Code", "PEratio"}.issubset(df_twse.columns):
-            frames.append(
-                df_twse[["Code", "PEratio"]].rename(
-                    columns={"Code": "stock_id", "PEratio": "pe_ratio_public"}
-                )
-            )
     except Exception:
-        pass
+        raw_twse = []
 
     try:
         raw_tpex = fetch_json_tpex(URL_TPEX_PE)
-        df_tpex = pd.DataFrame(raw_tpex)
-        if {"SecuritiesCompanyCode", "PriceEarningRatio"}.issubset(df_tpex.columns):
-            frames.append(
-                df_tpex[["SecuritiesCompanyCode", "PriceEarningRatio"]].rename(
-                    columns={
-                        "SecuritiesCompanyCode": "stock_id",
-                        "PriceEarningRatio": "pe_ratio_public",
-                    }
-                )
-            )
-        elif {"股票代號", "本益比"}.issubset(df_tpex.columns):
-            frames.append(
-                df_tpex[["股票代號", "本益比"]].rename(
-                    columns={"股票代號": "stock_id", "本益比": "pe_ratio_public"}
-                )
-            )
     except Exception:
-        pass
+        raw_tpex = []
 
-    if not frames:
-        return pd.DataFrame(columns=["stock_id", "pe_ratio_public"])
-
-    df = pd.concat(frames, ignore_index=True)
-    df["stock_id"] = df["stock_id"].astype(str).str.strip()
-    df["pe_ratio_public"] = (
-        df["pe_ratio_public"].astype(str).str.replace(",", "", regex=False).str.strip()
-    )
-    df["pe_ratio_public"] = pd.to_numeric(df["pe_ratio_public"], errors="coerce")
-    df.loc[df["pe_ratio_public"] <= 0, "pe_ratio_public"] = pd.NA
-    return df.drop_duplicates("stock_id")
+    return build_public_pe_snapshot(raw_twse, raw_tpex)
 
 
 def attach_public_valuation(

@@ -1,9 +1,12 @@
 import os
 import streamlit as st
-import requests
 import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from _institutional_flow import (
+    fetch_tpex_3insti as fetch_tpex_3insti_shared,
+    fetch_twse_3insti as fetch_twse_3insti_shared,
+)
 from _market_data import build_price_snapshot
 from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
 from _public_valuation import attach_public_valuation, fetch_public_pe_ratios
@@ -316,6 +319,7 @@ def fetch_twse_3insti(date_ymd: str) -> pd.DataFrame:
     """查詢 TWSE 三大法人個股買賣超（date_ymd: YYYYMMDD）
     回傳欄位：stock_id, foreign_net_shares（外資合計買賣超股數）
     """
+    return fetch_twse_3insti_shared(date_ymd)
     url = (f"https://www.twse.com.tw/fund/T86"
            f"?response=json&date={date_ymd}&selectType=ALLBUT0999")
     try:
@@ -334,13 +338,11 @@ def fetch_twse_3insti(date_ymd: str) -> pd.DataFrame:
         if col_f is None:
             st.warning(f"⚠️ TWSE T86 找不到外資欄位，實際欄位：{list(df.columns)}")
             return pd.DataFrame()
-        net = pd.to_numeric(df[col_f].str.replace(",", ""), errors="coerce").fillna(0)
-        if col_fd:
-            net = net + pd.to_numeric(df[col_fd].str.replace(",", ""), errors="coerce").fillna(0)
-        df["foreign_net_shares"] = net
-        df2 = df[["證券代號", "foreign_net_shares"]].rename(columns={"證券代號": "stock_id"})
-        df2["stock_id"] = df2["stock_id"].str.strip()
-        return df2
+        return build_institutional_net_buy_frame(
+            stock_ids=df["證券代號"],
+            primary_net_shares=df[col_f].astype(str).str.replace(",", ""),
+            secondary_net_shares=df[col_fd].astype(str).str.replace(",", "") if col_fd else None,
+        )
     except Exception as e:
         st.warning(f"⚠️ TWSE 三大法人 API 例外：{e}")
         return pd.DataFrame()
@@ -352,6 +354,7 @@ def fetch_tpex_3insti(date_roc: str) -> pd.DataFrame:
     優先使用 OpenAPI，回傳欄位：stock_id, foreign_net_shares
     """
     # TPEX OpenAPI（較穩定）
+    return fetch_tpex_3insti_shared(date_roc)
     url_open = ("https://www.tpex.org.tw/openapi/v1/"
                 "tpex_mainboard_3insti_quotes")
     try:
@@ -367,11 +370,11 @@ def fetch_tpex_3insti(date_roc: str) -> pd.DataFrame:
         col_fd  = next((c for c in df.columns if "DealerHedging" in c and "Net" in c and "Shares" in c), None)
         if col_id is None or col_f is None:
             raise ValueError(f"欄位不符：{list(df.columns)}")
-        net = pd.to_numeric(df[col_f].astype(str).str.replace(",", ""), errors="coerce").fillna(0)
-        if col_fd:
-            net = net + pd.to_numeric(df[col_fd].astype(str).str.replace(",", ""), errors="coerce").fillna(0)
-        df2 = pd.DataFrame({"stock_id": df[col_id].astype(str).str.strip(), "foreign_net_shares": net})
-        return df2
+        return build_institutional_net_buy_frame(
+            stock_ids=df[col_id],
+            primary_net_shares=df[col_f].astype(str).str.replace(",", ""),
+            secondary_net_shares=df[col_fd].astype(str).str.replace(",", "") if col_fd else None,
+        )
     except Exception:
         pass  # fallback 到舊版 web API
 
@@ -392,11 +395,11 @@ def fetch_tpex_3insti(date_roc: str) -> pd.DataFrame:
             col_f = 4  # 預設欄位 index fallback
         if col_fd is None and df.shape[1] > 7:
             col_fd = 7
-        net = pd.to_numeric(df[col_f].astype(str).str.replace(",", ""), errors="coerce").fillna(0)
-        if col_fd is not None:
-            net = net + pd.to_numeric(df[col_fd].astype(str).str.replace(",", ""), errors="coerce").fillna(0)
-        df2 = pd.DataFrame({"stock_id": df[0].astype(str).str.strip(), "foreign_net_shares": net})
-        return df2
+        return build_institutional_net_buy_frame(
+            stock_ids=df[0],
+            primary_net_shares=df[col_f].astype(str).str.replace(",", ""),
+            secondary_net_shares=df[col_fd].astype(str).str.replace(",", "") if col_fd is not None else None,
+        )
     except Exception as e:
         st.warning(f"⚠️ TPEX 三大法人 API 例外：{e}")
         return pd.DataFrame()
