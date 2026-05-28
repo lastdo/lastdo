@@ -279,9 +279,15 @@ if not run_btn:
         _rev_ym = _r["rev_ym"].iloc[0] if _count > 0 else "-"
         st.subheader(f"成長股策略結果：{_count} 檔（最新營收月份：{_rev_ym}）")
         _disp = make_growth_display_df(build_growth_alert_flags(_r, pe_max, rev_growth_min))
-        render_growth_result_overview(_disp, _rev_ym)
-        render_growth_alert_summary(_disp)
-        render_growth_table(_disp)
+        _tab_summary, _tab_table, _tab_diag = st.tabs(["結果總覽", "明細表", "診斷與資料"])
+        with _tab_summary:
+            render_growth_result_overview(_disp, _rev_ym)
+            render_growth_alert_summary(_disp)
+        with _tab_table:
+            render_growth_table(_disp)
+        with _tab_diag:
+            st.caption("這是上次執行結果；若要更新資料，請重新執行篩選。")
+            st.caption("資料來源：股價/營收來自 TWSE + TPEX OpenAPI；本益比來自官方上市櫃口徑。")
         _csv = dataframe_to_csv_bytes(_disp)
         st.download_button(
             "下載 CSV",
@@ -470,12 +476,13 @@ if df_result.empty:
     st.warning(f"候選股 {n_candidates} 檔中，沒有股票符合本益比 < {pe_max:.0f}。")
     df_no_pe = df_candidates[df_candidates["pe_ratio"].notna()].sort_values("pe_ratio")
     if not df_no_pe.empty:
-        st.caption("以下為通過其他條件但未通過本益比門檻的股票（前 20 檔）。")
-        st.dataframe(
-            df_no_pe[["stock_id", "stock_name", "market", "close", "pe_ratio", "avg_rev_yoy"]].head(20),
-            use_container_width=True,
-            hide_index=True,
-        )
+        with st.expander("查看接近本益比門檻的候選股", expanded=False):
+            st.caption("以下為通過其他條件但未通過本益比門檻的股票（前 20 檔）。")
+            st.dataframe(
+                df_no_pe[["stock_id", "stock_name", "market", "close", "pe_ratio", "avg_rev_yoy"]].head(20),
+                use_container_width=True,
+                hide_index=True,
+            )
     st.stop()
 
 progress.progress(94, text=f"查詢季線條件（FinMind，{len(df_result)} 檔）...")
@@ -499,8 +506,8 @@ if ma60_rate_limited > 0:
         "請稍後再試或清除快取後重跑。"
     )
     if not _sample_ma60.empty:
-        st.caption("以下為部分受限股票：")
-        st.dataframe(_sample_ma60, use_container_width=True, hide_index=True)
+        with st.expander("查看部分受限股票", expanded=False):
+            st.dataframe(_sample_ma60, use_container_width=True, hide_index=True)
     st.stop()
 
 df_result = df_result[
@@ -531,23 +538,43 @@ st.divider()
 
 if count == 0:
     st.warning("通過本益比條件的股票，在季線 12% 條件下全數被排除。")
+    with st.expander("查看本次篩選流程", expanded=False):
+        st.write(
+            f"初步候選：{n_candidates} 檔｜"
+            f"本益比門檻：< {pe_max:.0f}｜"
+            f"季線限制：收盤價不高於 MA60 的 {1 + SEASON_LINE_MAX_PREMIUM:.0%}"
+        )
     st.stop()
 
-st.subheader(f"成長股策略結果：{count} 檔（最新營收月份：{rev_ym}）")
-
 # 顯示 TWSE 股價資料日期，方便確認本次篩選使用的交易日。
+_price_date_caption = ""
 try:
     _price_date_raw = raw_twse_price[0].get("Date", "")
     if len(_price_date_raw) == 7:  # 民國日期格式，例如 1150512
         _y, _m, _d = int(_price_date_raw[:3]) + 1911, _price_date_raw[3:5], _price_date_raw[5:7]
-        st.caption(f"股價資料日期：{_y}/{_m}/{_d}（TWSE）")
+        _price_date_caption = f"股價資料日期：{_y}/{_m}/{_d}（TWSE）"
 except Exception:
     pass
 
 display_df = make_growth_display_df(build_growth_alert_flags(df_result, pe_max, rev_growth_min))
-render_growth_result_overview(display_df, rev_ym)
-render_growth_alert_summary(display_df)
-render_growth_table(display_df)
+st.subheader(f"成長股策略結果：{count} 檔（最新營收月份：{rev_ym}）")
+tab_summary, tab_table, tab_diag = st.tabs(["結果總覽", "明細表", "診斷與資料"])
+with tab_summary:
+    render_growth_result_overview(display_df, rev_ym)
+    render_growth_alert_summary(display_df)
+with tab_table:
+    render_growth_table(display_df)
+with tab_diag:
+    if _price_date_caption:
+        st.caption(_price_date_caption)
+    st.write(
+        f"初步候選：{n_candidates} 檔｜"
+        f"結果數量：{count} 檔｜"
+        f"本益比：< {pe_max:.0f}｜"
+        f"近 2 月營收年增：> {rev_growth_min:.0f}%"
+    )
+    st.caption("資料來源：股價/營收來自 TWSE + TPEX OpenAPI；本益比來自官方上市櫃口徑。")
+    st.caption("本工具僅供研究參考，請自行評估投資風險。")
 
 csv_bytes = dataframe_to_csv_bytes(display_df)
 st.download_button(
@@ -558,6 +585,4 @@ st.download_button(
 )
 
 st.divider()
-st.caption("資料來源：股價/營收來自 TWSE + TPEX OpenAPI；本益比來自官方上市櫃口徑。")
-st.caption("本工具僅供研究參考，請自行評估投資風險。")
 

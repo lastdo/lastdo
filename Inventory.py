@@ -607,74 +607,75 @@ else:
             hide_index=True,
         )
 
-    st.markdown('<div class="form-section-title">操作</div>', unsafe_allow_html=True)
-    h0, h1, h2, h3, h4, h5 = st.columns([0.4, 1.1, 1.7, 1.0, 2.5, 2.7])
-    h0.markdown('<div class="col-hdr">#</div>', unsafe_allow_html=True)
-    h1.markdown('<div class="col-hdr">代碼</div>', unsafe_allow_html=True)
-    h2.markdown('<div class="col-hdr">股票名稱</div>', unsafe_allow_html=True)
-    h3.markdown('<div class="col-hdr">類型</div>', unsafe_allow_html=True)
-    h4.markdown('<div class="col-hdr">成本 / 股數</div>', unsafe_allow_html=True)
-    h5.markdown('<div class="col-hdr">操作</div>', unsafe_allow_html=True)
+    with st.expander("管理持股 / 自選股", expanded=False):
+        st.markdown('<div class="form-section-title">操作</div>', unsafe_allow_html=True)
+        h0, h1, h2, h3, h4, h5 = st.columns([0.4, 1.1, 1.7, 1.0, 2.5, 2.7])
+        h0.markdown('<div class="col-hdr">#</div>', unsafe_allow_html=True)
+        h1.markdown('<div class="col-hdr">代碼</div>', unsafe_allow_html=True)
+        h2.markdown('<div class="col-hdr">股票名稱</div>', unsafe_allow_html=True)
+        h3.markdown('<div class="col-hdr">類型</div>', unsafe_allow_html=True)
+        h4.markdown('<div class="col-hdr">成本 / 股數</div>', unsafe_allow_html=True)
+        h5.markdown('<div class="col-hdr">操作</div>', unsafe_allow_html=True)
 
-    for i, stock in enumerate(portfolio):
-        row_id = str(stock.get("row_id", ""))
-        symbol = str(stock.get("symbol", ""))
-        matched = portfolio_df[portfolio_df["symbol"] == symbol]
-        item_type = matched.iloc[0]["type"] if not matched.empty else "自選股"
-        name = stock_names.get(symbol, "")
-        default_price = _to_float(stock.get("price"))
-        default_shares = _to_int(stock.get("shares"))
+        for i, stock in enumerate(portfolio):
+            row_id = str(stock.get("row_id", ""))
+            symbol = str(stock.get("symbol", ""))
+            matched = portfolio_df[portfolio_df["symbol"] == symbol]
+            item_type = matched.iloc[0]["type"] if not matched.empty else "自選股"
+            name = stock_names.get(symbol, "")
+            default_price = _to_float(stock.get("price"))
+            default_shares = _to_int(stock.get("shares"))
 
-        c0, c1, c2, c3, c4, c5 = st.columns([0.4, 1.1, 1.7, 1.0, 2.5, 2.7])
-        with c0:
-            st.markdown(f"<div style='color:var(--text-muted);font-size:0.8rem;padding-top:10px;text-align:center'>{i+1}</div>", unsafe_allow_html=True)
-        with c1:
-            st.markdown(f"<div style='padding-top:6px'><span class='sym-badge'>{symbol}</span></div>", unsafe_allow_html=True)
-        with c2:
-            _name_html = name if name else "<span style='color:#cbd5e1'>—</span>"
-            st.markdown(f"<div class='stock-name-text' style='padding-top:10px'>{_name_html}</div>", unsafe_allow_html=True)
-        with c3:
-            badge_class = "holding" if item_type == "持股" else "watch"
-            st.markdown(f"<div style='padding-top:10px'><span class='status-badge {badge_class}'>{item_type}</span></div>", unsafe_allow_html=True)
-        with c4:
-            edit_col1, edit_col2 = st.columns(2)
-            with edit_col1:
-                edit_price = st.number_input(
-                    "成本",
-                    min_value=0.0,
-                    step=0.1,
-                    value=float(default_price or 0.0),
-                    key=f"price_{i}",
-                    label_visibility="collapsed",
-                )
-            with edit_col2:
-                edit_shares = st.number_input(
-                    "股數",
-                    min_value=0,
-                    step=1,
-                    value=int(default_shares or 0),
-                    key=f"shares_{i}",
-                    label_visibility="collapsed",
-                )
-            if st.button("儲存", key=f"save_{i}", use_container_width=True):
-                update_portfolio_record(
-                    row_id=row_id,
-                    family_id=family_id,
-                    avg_cost=edit_price if edit_price > 0 else None,
-                    shares=edit_shares if edit_shares > 0 else None,
-                )
-                st.toast(f"已更新「{symbol}」的持股資料")
-                st.rerun()
-        with c5:
-            btn_col1, btn_col2 = st.columns([3, 1])
-            with btn_col1:
-                if st.button("📈 AI 分析", key=f"analyze_{i}", use_container_width=True, type="primary"):
-                    st.session_state["selected_symbol"] = symbol
-                    st.switch_page("pages/1_app_tw.py")
-            with btn_col2:
-                if st.button("🗑️", key=f"del_{i}", help=f"移除 {symbol}"):
-                    delete_portfolio_item(row_id=row_id, family_id=family_id)
-                    st.toast(f"✅ 已移除「{symbol}」")
+            c0, c1, c2, c3, c4, c5 = st.columns([0.4, 1.1, 1.7, 1.0, 2.5, 2.7])
+            with c0:
+                st.markdown(f"<div style='color:var(--text-muted);font-size:0.8rem;padding-top:10px;text-align:center'>{i+1}</div>", unsafe_allow_html=True)
+            with c1:
+                st.markdown(f"<div style='padding-top:6px'><span class='sym-badge'>{symbol}</span></div>", unsafe_allow_html=True)
+            with c2:
+                _name_html = name if name else "<span style='color:#cbd5e1'>—</span>"
+                st.markdown(f"<div class='stock-name-text' style='padding-top:10px'>{_name_html}</div>", unsafe_allow_html=True)
+            with c3:
+                badge_class = "holding" if item_type == "持股" else "watch"
+                st.markdown(f"<div style='padding-top:10px'><span class='status-badge {badge_class}'>{item_type}</span></div>", unsafe_allow_html=True)
+            with c4:
+                edit_col1, edit_col2 = st.columns(2)
+                with edit_col1:
+                    edit_price = st.number_input(
+                        "成本",
+                        min_value=0.0,
+                        step=0.1,
+                        value=float(default_price or 0.0),
+                        key=f"price_{i}",
+                        label_visibility="collapsed",
+                    )
+                with edit_col2:
+                    edit_shares = st.number_input(
+                        "股數",
+                        min_value=0,
+                        step=1,
+                        value=int(default_shares or 0),
+                        key=f"shares_{i}",
+                        label_visibility="collapsed",
+                    )
+                if st.button("儲存", key=f"save_{i}", use_container_width=True):
+                    update_portfolio_record(
+                        row_id=row_id,
+                        family_id=family_id,
+                        avg_cost=edit_price if edit_price > 0 else None,
+                        shares=edit_shares if edit_shares > 0 else None,
+                    )
+                    st.toast(f"已更新「{symbol}」的持股資料")
                     st.rerun()
+            with c5:
+                btn_col1, btn_col2 = st.columns([3, 1])
+                with btn_col1:
+                    if st.button("📈 AI 分析", key=f"analyze_{i}", use_container_width=True, type="primary"):
+                        st.session_state["selected_symbol"] = symbol
+                        st.switch_page("pages/1_app_tw.py")
+                with btn_col2:
+                    if st.button("🗑️", key=f"del_{i}", help=f"移除 {symbol}"):
+                        delete_portfolio_item(row_id=row_id, family_id=family_id)
+                        st.toast(f"✅ 已移除「{symbol}」")
+                        st.rerun()
 
-        st.markdown("<hr class='row-divider'>", unsafe_allow_html=True)
+            st.markdown("<hr class='row-divider'>", unsafe_allow_html=True)

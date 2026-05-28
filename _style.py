@@ -199,6 +199,59 @@ div[data-testid="stForm"] {
     border: 1px solid var(--border-default);
 }
 
+div[data-testid="stDataFrame"] {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: 10px;
+    box-shadow: var(--shadow-soft);
+    overflow: hidden;
+}
+div[data-testid="stDataFrame"] [role="columnheader"],
+div[data-testid="stDataFrame"] [data-testid="stTableStyledTable"] thead th {
+    background: #edf4fb !important;
+    color: var(--text-primary) !important;
+    font-weight: 800 !important;
+}
+div[data-testid="stDataFrame"] [role="gridcell"],
+div[data-testid="stDataFrame"] [role="columnheader"] {
+    border-color: #e7edf4 !important;
+}
+div[data-testid="stDataFrame"] [role="gridcell"] {
+    color: var(--text-primary) !important;
+}
+div[data-testid="stDataFrame"] [role="row"]:hover [role="gridcell"] {
+    background: #f8fbff !important;
+}
+
+div[data-testid="stAlert"] {
+    border-radius: 10px !important;
+    border: 1px solid var(--border-default) !important;
+    box-shadow: var(--shadow-soft);
+}
+div[data-testid="stAlert"] [data-testid="stMarkdownContainer"] {
+    font-size: 0.9rem;
+    line-height: 1.55;
+}
+
+details[data-testid="stExpander"] {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: 10px;
+    box-shadow: var(--shadow-soft);
+    overflow: hidden;
+}
+details[data-testid="stExpander"] summary {
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+div[data-testid="stTabs"] button {
+    font-weight: 700;
+}
+div[data-testid="stTabs"] button[aria-selected="true"] {
+    color: var(--accent-primary) !important;
+}
+
 .stButton > button[kind="primary"] {
     background: linear-gradient(135deg, var(--bg-header-end), #4f8df7) !important;
     border: none !important;
