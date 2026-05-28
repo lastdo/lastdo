@@ -16,6 +16,14 @@ from _finmind_api import (
     is_rate_limited,
 )
 from _export_utils import dataframe_to_csv_bytes
+from _market_data import (
+    REVENUE_COLUMNS,
+    build_price_snapshot,
+    build_recent_revenue_metrics,
+    build_revenue_snapshot,
+    latest_revenue_month,
+    prev_roc_month,
+)
 from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
 from _public_valuation import attach_public_valuation, fetch_public_pe_ratios
 
@@ -380,63 +388,13 @@ progress.progress(65, text="正在整理候選名單...")
 # ------------------------------
 # Step 2：整理股價資料（TWSE + TPEX）
 # ------------------------------
-df_twse_p = pd.DataFrame(raw_twse_price)[["Code", "Name", "ClosingPrice", "TradeVolume"]].copy()
-df_twse_p = df_twse_p.rename(columns={"Code": "stock_id", "Name": "stock_name",
-                                       "ClosingPrice": "close", "TradeVolume": "vol_shares"})
-df_twse_p["market"] = "TWSE"
-
-df_tpex_p = pd.DataFrame(raw_tpex_price)[["SecuritiesCompanyCode", "CompanyName", "Close", "TradingShares"]].copy()
-df_tpex_p = df_tpex_p.rename(columns={"SecuritiesCompanyCode": "stock_id", "CompanyName": "stock_name",
-                                        "Close": "close", "TradingShares": "vol_shares"})
-df_tpex_p["market"] = "TPEX"
-
-df_price = pd.concat([df_twse_p, df_tpex_p], ignore_index=True)
-df_price["close"] = pd.to_numeric(df_price["close"], errors="coerce")
-df_price["vol_shares"] = pd.to_numeric(df_price["vol_shares"], errors="coerce")
-df_price["vol_lot"] = df_price["vol_shares"] / 1000
-df_price = df_price[["stock_id", "stock_name", "market", "close", "vol_lot"]].dropna()
+df_price = build_price_snapshot(raw_twse_price, raw_tpex_price)
 
 # ------------------------------
 # Step 3：整理營收資料（TWSE + TPEX）
 # ------------------------------
-rev_col_map = {
-    "公司代號": "stock_id",
-    "資料年月": "rev_ym",
-    "營業收入-當月營收": "rev_cur",
-    "營業收入-去年當月營收": "rev_ly",
-    "營業收入-去年同月增減(%)": "rev_yoy",
-}
-df_twse_r = pd.DataFrame(raw_twse_rev).rename(columns=rev_col_map)[list(rev_col_map.values())].copy()
-df_tpex_r = pd.DataFrame(raw_tpex_rev).rename(columns=rev_col_map)[list(rev_col_map.values())].copy()
-
-df_rev = pd.concat([df_twse_r, df_tpex_r], ignore_index=True)
-df_rev["rev_yoy"] = pd.to_numeric(df_rev["rev_yoy"], errors="coerce")
-df_rev["rev_cur"] = pd.to_numeric(df_rev["rev_cur"], errors="coerce")
-df_rev["rev_ly"]  = pd.to_numeric(df_rev["rev_ly"],  errors="coerce")
-df_rev = df_rev.dropna(subset=["rev_yoy"])
-
-# 若最新月份不足兩個月，補抓前一個月資料，才能計算近 2 月平均營收年增。
-def _prev_roc_ym(ym_str: str) -> str:
-    """將民國年月（如 11504 或 202604）轉成前一個月份。"""
-    try:
-        s = str(ym_str).strip().replace("/", "")
-        if len(s) == 5:           # 民國格式：11504
-            roc_y, m = int(s[:3]), int(s[3:])
-        elif len(s) == 6:         # 西元格式：202604
-            roc_y, m = int(s[:4]) - 1911, int(s[4:])
-        else:
-            return ""
-        m -= 1
-        if m == 0:
-            m, roc_y = 12, roc_y - 1
-        return f"{roc_y}{m:02d}"
-    except Exception:
-        return ""
-
-_latest_ym_list = df_rev["rev_ym"].dropna().unique().tolist()
-_prev_ym = _prev_roc_ym(
-    pd.Series(_latest_ym_list).value_counts().index[0]
-) if _latest_ym_list else ""
+df_rev = build_revenue_snapshot(raw_twse_rev, raw_tpex_rev)
+_prev_ym = prev_roc_month(latest_revenue_month(df_rev))
 
 if _prev_ym:
     progress.progress(65, text=f"補抓前一月營收資料（{_prev_ym}）...")
@@ -445,8 +403,8 @@ if _prev_ym:
         try:
             _raw_p = _fn(f"{_url}?yearmonth={_prev_ym}")
             _df_p = pd.DataFrame(_raw_p)
-            if not _df_p.empty and all(k in _df_p.columns for k in rev_col_map):
-                _df_p = _df_p.rename(columns=rev_col_map)[list(rev_col_map.values())].copy()
+            if not _df_p.empty and all(k in _df_p.columns for k in REVENUE_COLUMNS):
+                _df_p = _df_p.rename(columns=REVENUE_COLUMNS)[list(REVENUE_COLUMNS.values())].copy()
                 _prev_parts.append(_df_p)
         except Exception:
             pass
@@ -454,36 +412,16 @@ if _prev_ym:
         _df_prev = pd.concat(_prev_parts, ignore_index=True)
         for _c in ["rev_yoy", "rev_cur", "rev_ly"]:
             _df_prev[_c] = pd.to_numeric(_df_prev[_c], errors="coerce")
+        _df_prev["stock_id"] = _df_prev["stock_id"].astype(str).str.strip()
+        _df_prev["rev_ym"] = _df_prev["rev_ym"].astype(str).str.strip().str.replace("/", "", regex=False)
         _df_prev = _df_prev.dropna(subset=["rev_yoy"])
         # 部分 API 會忽略 yearmonth 參數，因此這裡再手動篩一次月份。
-        _df_prev = _df_prev[
-            _df_prev["rev_ym"].astype(str).str.strip().str.replace("/", "") == _prev_ym
-        ]
+        _df_prev = _df_prev[_df_prev["rev_ym"] == _prev_ym]
         if not _df_prev.empty:
             df_rev = pd.concat([df_rev, _df_prev], ignore_index=True)
 
 # 只取每檔股票最近 2 個月的營收年增率，計算平均 YoY 與月份字串。
-df_rev_s = df_rev.sort_values(["stock_id", "rev_ym"], ascending=[True, False])
-df_rev_top2 = df_rev_s.groupby("stock_id").head(2)
-df_rev_avg = df_rev_top2.groupby("stock_id", as_index=False).agg(
-    avg_rev_yoy=("rev_yoy", "mean"),
-    rev_months=("rev_ym", lambda x: "/".join(sorted(x.tolist(), reverse=True))),
-)
-# 保留每檔股票最新一筆營收，並合併近 2 月平均營收年增資訊。
-df_rev_latest = df_rev_s.groupby("stock_id", as_index=False).first()
-df_rev_recent = (
-    df_rev_top2.sort_values(["stock_id", "rev_ym"], ascending=[True, False])
-    .groupby("stock_id")
-    .agg(
-        latest_rev_yoy=("rev_yoy", "first"),
-        prev_rev_yoy=("rev_yoy", lambda x: x.iloc[1] if len(x) > 1 else x.iloc[0]),
-    )
-    .reset_index()
-)
-df_rev_final = df_rev_latest.merge(
-    df_rev_avg[["stock_id", "avg_rev_yoy", "rev_months"]], on="stock_id", how="left"
-)
-df_rev_final = df_rev_final.merge(df_rev_recent, on="stock_id", how="left")
+df_rev_final = build_recent_revenue_metrics(df_rev, months=2)
 
 # ------------------------------
 # Step 4：依營收、成交量、股價做初步篩選
