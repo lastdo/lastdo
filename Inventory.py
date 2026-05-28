@@ -117,12 +117,6 @@ def fetch_all_stock_names() -> dict:
     except Exception:
         return {}
 
-@st.cache_data(ttl=900, show_spinner=False)
-def fetch_recent_stock_price(symbol: str) -> dict:
-    try:
-        return fetch_market_snapshot().get(symbol, {})
-    except Exception:
-        return {}
 
 st.set_page_config(page_title="庫存股管理", page_icon="💼", layout="wide")
 
@@ -270,14 +264,14 @@ def estimate_fee(amount, rate: float) -> int | None:
     return int(amount * rate)
 
 
-def build_portfolio_rows(portfolio: list, stock_names: dict) -> pd.DataFrame:
+def build_portfolio_rows(portfolio: list, stock_names: dict, market_snapshot: dict) -> pd.DataFrame:
     rows = []
     for stock in portfolio:
         symbol = str(stock.get("symbol", "")).strip()
         cost_price = _to_float(stock.get("price"))
         shares = _to_int(stock.get("shares"))
         is_holding = bool(cost_price and shares and cost_price > 0 and shares > 0)
-        price_info = fetch_recent_stock_price(symbol) if symbol else {}
+        price_info = market_snapshot.get(symbol, {}) if symbol else {}
         latest_price = price_info.get("latest_price")
         previous_price = price_info.get("previous_price")
 
@@ -344,7 +338,11 @@ def build_portfolio_rows(portfolio: list, stock_names: dict) -> pd.DataFrame:
     return df
 
 
-stock_names = fetch_all_stock_names()
+market_snapshot = fetch_market_snapshot()
+stock_names = {
+    stock_id: info.get("stock_name", "")
+    for stock_id, info in market_snapshot.items()
+}
 store_status = get_store_status()
 known_family_ids = list_family_ids()
 with st.sidebar:
@@ -381,7 +379,7 @@ st.markdown("""
 
 # ── 投組摘要 ──────────────────────────────────────────────────────────────────
 with st.spinner("正在更新庫存股市值與損益..."):
-    portfolio_df = build_portfolio_rows(portfolio, stock_names)
+    portfolio_df = build_portfolio_rows(portfolio, stock_names, market_snapshot)
 
 if portfolio_df.empty:
     holding_df = pd.DataFrame()

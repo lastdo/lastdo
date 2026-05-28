@@ -1,6 +1,20 @@
 import pandas as pd
 
 
+PUBLIC_PE_TWSE_COLUMNS = {
+    "Code": "stock_id",
+    "PEratio": "pe_ratio_public",
+}
+PUBLIC_PE_TPEX_COLUMNS = {
+    "SecuritiesCompanyCode": "stock_id",
+    "PriceEarningRatio": "pe_ratio_public",
+}
+PUBLIC_PE_TPEX_FALLBACK_COLUMNS = {
+    "股票代號": "stock_id",
+    "本益比": "pe_ratio_public",
+}
+
+
 PRICE_TWSE_COLUMNS = {
     "Code": "stock_id",
     "Name": "stock_name",
@@ -59,6 +73,54 @@ def build_revenue_snapshot(raw_twse_rev: list, raw_tpex_rev: list) -> pd.DataFra
     df_rev["rev_cur"] = clean_numeric(df_rev["rev_cur"])
     df_rev["rev_ly"] = clean_numeric(df_rev["rev_ly"])
     return df_rev.dropna(subset=["rev_yoy"])
+
+
+def build_public_pe_snapshot(raw_twse_pe: list, raw_tpex_pe: list) -> pd.DataFrame:
+    frames = []
+
+    df_twse = pd.DataFrame(raw_twse_pe)
+    if set(PUBLIC_PE_TWSE_COLUMNS).issubset(df_twse.columns):
+        frames.append(
+            df_twse[list(PUBLIC_PE_TWSE_COLUMNS)].rename(columns=PUBLIC_PE_TWSE_COLUMNS)
+        )
+
+    df_tpex = pd.DataFrame(raw_tpex_pe)
+    if set(PUBLIC_PE_TPEX_COLUMNS).issubset(df_tpex.columns):
+        frames.append(
+            df_tpex[list(PUBLIC_PE_TPEX_COLUMNS)].rename(columns=PUBLIC_PE_TPEX_COLUMNS)
+        )
+    elif set(PUBLIC_PE_TPEX_FALLBACK_COLUMNS).issubset(df_tpex.columns):
+        frames.append(
+            df_tpex[list(PUBLIC_PE_TPEX_FALLBACK_COLUMNS)].rename(
+                columns=PUBLIC_PE_TPEX_FALLBACK_COLUMNS
+            )
+        )
+
+    if not frames:
+        return pd.DataFrame(columns=["stock_id", "pe_ratio_public"])
+
+    df = pd.concat(frames, ignore_index=True)
+    df["stock_id"] = df["stock_id"].astype(str).str.strip()
+    df["pe_ratio_public"] = clean_numeric(df["pe_ratio_public"])
+    df.loc[df["pe_ratio_public"] <= 0, "pe_ratio_public"] = pd.NA
+    return df.drop_duplicates("stock_id")
+
+
+def build_institutional_net_buy_frame(
+    stock_ids,
+    primary_net_shares,
+    secondary_net_shares=None,
+) -> pd.DataFrame:
+    net = clean_numeric(pd.Series(primary_net_shares)).fillna(0)
+    if secondary_net_shares is not None:
+        net = net + clean_numeric(pd.Series(secondary_net_shares)).fillna(0)
+
+    return pd.DataFrame(
+        {
+            "stock_id": pd.Series(stock_ids).astype(str).str.strip(),
+            "foreign_net_shares": net,
+        }
+    )
 
 
 def prev_roc_month(ym_str: str) -> str:
