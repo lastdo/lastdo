@@ -16,6 +16,7 @@ from _finmind_api import (
     parse_eps_dataframe,
     parse_price_dataframe,
 )
+from _market_data import build_latest_revenue_view, build_price_snapshot, build_revenue_snapshot
 from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
 
 load_dotenv()
@@ -184,16 +185,6 @@ with st.sidebar:
     st.caption("📡 近半年歷史股價：FinMind TaiwanStockPrice（三線程查詢）")
     st.caption("📡 本益比：官方上市櫃 API")
     st.caption("📢 本系統僅供學術研究，不構成投資建議")
-
-
-def clean_numeric(series: pd.Series) -> pd.Series:
-    return pd.to_numeric(
-        series.astype(str)
-        .str.replace(",", "", regex=False)
-        .str.replace("--", "", regex=False)
-        .str.strip(),
-        errors="coerce",
-    )
 
 
 def parse_finmind_retry_seconds(error_msg: str):
@@ -551,28 +542,7 @@ progress.progress(40, text="🔧 整理股價與月營收資料...")
 # ─────────────────────────────────────────────
 # Step 2：整理股價與成交量
 # ─────────────────────────────────────────────
-df_twse_p = pd.DataFrame(raw_twse_price)[["Code", "Name", "ClosingPrice", "TradeVolume"]].copy()
-df_twse_p = df_twse_p.rename(columns={
-    "Code": "stock_id", "Name": "stock_name",
-    "ClosingPrice": "close", "TradeVolume": "vol_shares",
-})
-df_twse_p["market"] = "上市"
-
-df_tpex_p = pd.DataFrame(raw_tpex_price)[[
-    "SecuritiesCompanyCode", "CompanyName", "Close", "TradingShares",
-]].copy()
-df_tpex_p = df_tpex_p.rename(columns={
-    "SecuritiesCompanyCode": "stock_id", "CompanyName": "stock_name",
-    "Close": "close", "TradingShares": "vol_shares",
-})
-df_tpex_p["market"] = "上櫃"
-
-df_price = pd.concat([df_twse_p, df_tpex_p], ignore_index=True)
-df_price["close"] = clean_numeric(df_price["close"])
-df_price["vol_shares"] = clean_numeric(df_price["vol_shares"])
-df_price["vol_lot"] = df_price["vol_shares"] / 1000
-df_price["stock_id"] = df_price["stock_id"].astype(str).str.strip()
-df_price = df_price[["stock_id", "stock_name", "market", "close", "vol_lot"]].dropna()
+df_price = build_price_snapshot(raw_twse_price, raw_tpex_price)
 
 df_price_filtered = df_price[
     (df_price["close"] > price_min) & (df_price["vol_lot"] >= vol_min)
@@ -581,28 +551,8 @@ df_price_filtered = df_price[
 # ─────────────────────────────────────────────
 # Step 3：整理最新單月營收
 # ─────────────────────────────────────────────
-rev_col_map = {
-    "公司代號": "stock_id",
-    "資料年月": "rev_ym",
-    "營業收入-當月營收": "rev_cur",
-    "營業收入-去年當月營收": "rev_ly",
-    "營業收入-去年同月增減(%)": "rev_yoy",
-}
-df_twse_r = pd.DataFrame(raw_twse_rev).rename(columns=rev_col_map)[list(rev_col_map.values())].copy()
-df_tpex_r = pd.DataFrame(raw_tpex_rev).rename(columns=rev_col_map)[list(rev_col_map.values())].copy()
-
-df_rev = pd.concat([df_twse_r, df_tpex_r], ignore_index=True)
-df_rev["rev_yoy"] = clean_numeric(df_rev["rev_yoy"])
-df_rev["rev_cur"] = clean_numeric(df_rev["rev_cur"])
-df_rev["rev_ly"] = clean_numeric(df_rev["rev_ly"])
-df_rev["stock_id"] = df_rev["stock_id"].astype(str).str.strip()
-df_rev = df_rev.dropna(subset=["rev_yoy"])
-
-df_rev_latest = (
-    df_rev.sort_values(["stock_id", "rev_ym"], ascending=[True, False])
-    .groupby("stock_id", as_index=False)
-    .first()
-)
+df_rev = build_revenue_snapshot(raw_twse_rev, raw_tpex_rev)
+df_rev_latest = build_latest_revenue_view(df_rev)
 
 # ─────────────────────────────────────────────
 # Step 4：免費資料前置篩選

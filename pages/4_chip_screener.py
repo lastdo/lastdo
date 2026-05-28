@@ -4,6 +4,7 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from _market_data import build_price_snapshot
 from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
 from _public_valuation import attach_public_valuation, fetch_public_pe_ratios
 
@@ -422,27 +423,7 @@ progress.progress(25, text="🔧 整理股價資料並套用初步篩選...")
 # ─────────────────────────────────────────────
 # Step 2：整理股價+成交量
 # ─────────────────────────────────────────────
-df_twse_p = pd.DataFrame(raw_twse_price)[["Code", "Name", "ClosingPrice", "TradeVolume"]].copy()
-df_twse_p = df_twse_p.rename(columns={
-    "Code": "stock_id", "Name": "stock_name",
-    "ClosingPrice": "close", "TradeVolume": "vol_shares",
-})
-df_twse_p["stock_id"] = df_twse_p["stock_id"].str.strip()
-df_twse_p["market"] = "上市"
-
-df_tpex_p = pd.DataFrame(raw_tpex_price)[["SecuritiesCompanyCode", "CompanyName", "Close", "TradingShares"]].copy()
-df_tpex_p = df_tpex_p.rename(columns={
-    "SecuritiesCompanyCode": "stock_id", "CompanyName": "stock_name",
-    "Close": "close", "TradingShares": "vol_shares",
-})
-df_tpex_p["stock_id"] = df_tpex_p["stock_id"].str.strip()
-df_tpex_p["market"] = "上櫃"
-
-df_price = pd.concat([df_twse_p, df_tpex_p], ignore_index=True)
-df_price["close"]     = pd.to_numeric(df_price["close"],     errors="coerce")
-df_price["vol_shares"] = pd.to_numeric(df_price["vol_shares"], errors="coerce")
-df_price["vol_lot"]   = df_price["vol_shares"] / 1000
-df_price = df_price[["stock_id", "stock_name", "market", "close", "vol_lot"]].dropna()
+df_price = build_price_snapshot(raw_twse_price, raw_tpex_price)
 
 # ─────────────────────────────────────────────
 # Step 3：套用股價 + 成交量篩選

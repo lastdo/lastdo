@@ -35,6 +35,23 @@ GOOGLE_SCOPES = [
 ]
 
 
+def _resolve_local_portfolio_source():
+    if PORTFOLIO_FILE.exists():
+        return PORTFOLIO_FILE
+
+    # Backward compatibility: some local backups were saved with timestamp
+    # suffixes like `portfolio.json(20260524)`.
+    legacy_candidates = sorted(
+        PORTFOLIO_FILE.parent.glob(f"{PORTFOLIO_FILE.name}*"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for candidate in legacy_candidates:
+        if candidate.is_file():
+            return candidate
+    return PORTFOLIO_FILE
+
+
 @dataclass
 class PortfolioStoreStatus:
     backend: str
@@ -107,17 +124,20 @@ def get_default_family_id() -> str:
 
 
 def _load_local_portfolio() -> list[dict[str, Any]]:
-    if not PORTFOLIO_FILE.exists():
+    source_file = _resolve_local_portfolio_source()
+    if not source_file.exists():
         return []
 
-    with open(PORTFOLIO_FILE, "r", encoding="utf-8") as file:
+    with open(source_file, "r", encoding="utf-8") as file:
         raw_items = json.load(file)
 
     normalized_items = [normalize_portfolio_item(item) for item in raw_items]
 
     # Backfill legacy local portfolio rows so row_id/family metadata stay stable
     # across reruns; otherwise update/delete actions can point at transient ids.
-    if raw_items != normalized_items:
+    # Also migrate timestamp-suffixed legacy files back to the canonical
+    # `portfolio.json` location so future reads/writes stay consistent.
+    if raw_items != normalized_items or source_file != PORTFOLIO_FILE:
         _save_local_portfolio(normalized_items)
 
     return normalized_items
