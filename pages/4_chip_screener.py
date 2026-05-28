@@ -266,9 +266,15 @@ if not run_btn:
         _count = len(_r)
         st.subheader(f"📋 外資籌碼重壓名單（共 {_count} 檔）")
         _disp = make_chip_display_df(build_chip_alert_flags(_r))
-        render_chip_result_overview(_disp, f"{days_n} 日")
-        render_chip_alert_summary(_disp)
-        render_chip_table(_disp)
+        _tab_summary, _tab_table, _tab_diag = st.tabs(["結果總覽", "明細表", "診斷與資料"])
+        with _tab_summary:
+            render_chip_result_overview(_disp, f"{days_n} 日")
+            render_chip_alert_summary(_disp)
+        with _tab_table:
+            render_chip_table(_disp)
+        with _tab_diag:
+            st.caption("這是上次執行結果；若要更新資料，請重新執行篩選。")
+            st.caption("資料來源：股價為 TWSE + TPEX OpenAPI；外資買賣超為 TWSE + TPEX；本益比為官方上市櫃 API。")
         _csv = dataframe_to_csv_bytes(_disp)
         st.download_button(
             "⬇️ 下載 CSV（Excel 可直接開啟）", _csv,
@@ -536,13 +542,14 @@ if n_candidates == 0:
         f"但外資買超 > {foreign_buy_min:,.0f} 張後無符合，請放寬條件。"
     )
     if not df_top_foreign.empty:
-        st.caption(f"以下為外資近{days_n}日買超最大前20檔（供參考，實際數值）：")
-        st.dataframe(
-            df_top_foreign[["stock_id", "stock_name", "market", "close", "foreign_net_buy_lot", "vol_lot"]]
-            .rename(columns={"stock_id":"股票代碼","stock_name":"股票名稱","market":"市場",
-                             "close":"收盤價(元)","foreign_net_buy_lot":"外資買超(張)","vol_lot":"成交量(張)"}),
-            use_container_width=True, hide_index=True,
-        )
+        with st.expander("查看外資買超較高的候選股", expanded=False):
+            st.caption(f"以下為外資近{days_n}日買超最大前20檔（供參考，實際數值）：")
+            st.dataframe(
+                df_top_foreign[["stock_id", "stock_name", "market", "close", "foreign_net_buy_lot", "vol_lot"]]
+                .rename(columns={"stock_id":"股票代碼","stock_name":"股票名稱","market":"市場",
+                                 "close":"收盤價(元)","foreign_net_buy_lot":"外資買超(張)","vol_lot":"成交量(張)"}),
+                use_container_width=True, hide_index=True,
+            )
     st.stop()
 
 # ─────────────────────────────────────────────
@@ -586,16 +593,15 @@ if count == 0:
     )
     df_no_pe = df_all[df_all["pe_ratio"].notna()].sort_values("pe_ratio")
     if not df_no_pe.empty:
-        st.caption("以下為通過外資買超條件但本益比不符的股票（供參考）：")
-        st.dataframe(
-            df_no_pe[["stock_id", "stock_name", "market", "close", "pe_ratio", "foreign_net_buy_lot"]].head(20),
-            use_container_width=True, hide_index=True,
-        )
+        with st.expander("查看通過外資條件但未通過本益比的股票", expanded=False):
+            st.dataframe(
+                df_no_pe[["stock_id", "stock_name", "market", "close", "pe_ratio", "foreign_net_buy_lot"]].head(20),
+                use_container_width=True, hide_index=True,
+            )
     st.stop()
 
-st.subheader(f"📋 外資籌碼重壓名單（共 {count} 檔，以收盤價降冪排序）")
-
 # 顯示資料日期
+_data_date_caption = ""
 try:
     _price_date_raw = raw_twse_price[0].get("Date", "")
     if len(_price_date_raw) == 7:
@@ -603,7 +609,7 @@ try:
         _date_str = f"{_y}/{_m}/{_d}"
     else:
         _date_str = _price_date_raw
-    st.caption(
+    _data_date_caption = (
         f"📅 股價資料日期：{_date_str}（TWSE 最近交易日）"
         f"｜外資買賣超統計：{_inst_date0} ~ {_inst_date1}（最近 {days_n} 交易日）"
     )
@@ -611,9 +617,24 @@ except Exception:
     pass
 
 display_df = make_chip_display_df(build_chip_alert_flags(df_result))
-render_chip_result_overview(display_df, f"{days_n} 日")
-render_chip_alert_summary(display_df)
-render_chip_table(display_df)
+st.subheader(f"📋 外資籌碼重壓名單（共 {count} 檔，以收盤價降冪排序）")
+tab_summary, tab_table, tab_diag = st.tabs(["結果總覽", "明細表", "診斷與資料"])
+with tab_summary:
+    render_chip_result_overview(display_df, f"{days_n} 日")
+    render_chip_alert_summary(display_df)
+with tab_table:
+    render_chip_table(display_df)
+with tab_diag:
+    if _data_date_caption:
+        st.caption(_data_date_caption)
+    st.write(
+        f"股價/成交量通過：{n_price_filtered} 檔｜"
+        f"外資資料 join 後：{_n_matched} 檔｜"
+        f"外資門檻通過：{n_candidates} 檔｜"
+        f"結果數量：{count} 檔"
+    )
+    st.caption("📡 股價：TWSE + TPEX OpenAPI（免費）｜ 外資買賣超：TWSE + TPEX（免費）｜ 本益比：官方上市櫃 API")
+    st.caption("📢 本系統僅供學術研究與教育用途，不構成任何投資建議")
 
 csv_bytes = dataframe_to_csv_bytes(display_df)
 st.download_button(
@@ -624,5 +645,3 @@ st.download_button(
 )
 
 st.divider()
-st.caption("📡 股價：TWSE + TPEX OpenAPI（免費）｜ 外資買賣超：TWSE + TPEX（免費）｜ 本益比：官方上市櫃 API")
-st.caption("📢 本系統僅供學術研究與教育用途，不構成任何投資建議")

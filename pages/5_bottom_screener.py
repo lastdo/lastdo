@@ -309,10 +309,16 @@ if not run_btn:
         _r = st.session_state["bottom_screener_result"]
         st.info("💡 顯示上次選股結果。如需重新選股請點擊「開始選股」。")
         _disp = make_display_df(build_alert_flags(_r, rev_growth_min, rebound_max))
-        render_bottom_result_overview(_disp, f"{support_months} 個月")
         st.subheader(f"📋 底部剛起漲名單（共 {len(_disp)} 檔）")
-        render_alert_summary(_disp)
-        render_bottom_table(_disp)
+        _tab_summary, _tab_table, _tab_diag = st.tabs(["結果總覽", "明細表", "診斷與資料"])
+        with _tab_summary:
+            render_bottom_result_overview(_disp, f"{support_months} 個月")
+            render_alert_summary(_disp)
+        with _tab_table:
+            render_bottom_table(_disp)
+        with _tab_diag:
+            st.caption("這是上次執行結果；若要更新資料，請重新執行篩選。")
+            st.caption("資料來源：股價/月營收來自 TWSE + TPEX OpenAPI；歷史股價來自 FinMind TaiwanStockPrice。")
         _csv = dataframe_to_csv_bytes(_disp)
         st.download_button(
             "⬇️ 下載 CSV（Excel 可直接開啟）", _csv,
@@ -691,38 +697,37 @@ col5.metric("股價", f"> {price_min:.0f} 元")
 
 st.divider()
 
-with st.expander("🔎 篩選流程診斷", expanded=False):
-    st.write(
-        f"成交量+營收通過：{n_candidates} 檔｜"
-        f"歷史股價查詢：{n_targets} 檔｜"
-        f"可計算支撐價：{len(df_support)} 檔｜"
-        f"歷史資料不足/失敗：{len(history_failed)} 檔"
-    )
-    _diag = df_support[[
-        "stock_id", "stock_name", "market", "close", "support_price", "support_date",
-        "rebound_pct", "vol_lot", "rev_yoy", "rev_ym", "history_days",
-        "avg_vol_20", "latest_hist_vol_lot",
-    ]].copy()
-    _diag = make_display_df(build_alert_flags(_diag, rev_growth_min, rebound_max))
-    st.caption("以下為已成功計算近半年支撐價的股票，包含未通過起漲幅條件者。")
-    st.dataframe(_diag, use_container_width=True, hide_index=True)
+_diag = df_support[[
+    "stock_id", "stock_name", "market", "close", "support_price", "support_date",
+    "rebound_pct", "vol_lot", "rev_yoy", "rev_ym", "history_days",
+    "avg_vol_20", "latest_hist_vol_lot",
+]].copy()
+_diag = make_display_df(build_alert_flags(_diag, rev_growth_min, rebound_max))
 
 if count == 0:
     st.warning(
         f"⚠️ 已成功計算 {len(df_support)} 檔支撐價，但自底部起漲幅 ≤ {rebound_max:.0f}% 後無符合。"
     )
+    with st.expander("查看篩選流程診斷", expanded=False):
+        st.write(
+            f"成交量+營收通過：{n_candidates} 檔｜"
+            f"歷史股價查詢：{n_targets} 檔｜"
+            f"可計算支撐價：{len(df_support)} 檔｜"
+            f"歷史資料不足/失敗：{len(history_failed)} 檔"
+        )
+        st.caption("以下為已成功計算近半年支撐價的股票，包含未通過起漲幅條件者。")
+        st.dataframe(_diag, use_container_width=True, hide_index=True)
     _near = df_support.sort_values(["close", "rebound_pct"], ascending=[False, True]).head(20)
     if not _near.empty:
-        st.caption("以下為距離底部支撐較近的前 20 檔（供調整條件參考）：")
-        st.dataframe(
-            make_display_df(build_alert_flags(_near, rev_growth_min, rebound_max)),
-            use_container_width=True,
-            hide_index=True,
-        )
+        with st.expander("查看距離底部支撐較近的候選股", expanded=False):
+            st.dataframe(
+                make_display_df(build_alert_flags(_near, rev_growth_min, rebound_max)),
+                use_container_width=True,
+                hide_index=True,
+            )
     st.stop()
 
-st.subheader(f"📋 底部剛起漲名單（共 {count} 檔，以收盤價降冪排序）")
-
+_data_date_caption = ""
 try:
     _price_date_raw = raw_twse_price[0].get("Date", "")
     if len(_price_date_raw) == 7:
@@ -730,7 +735,7 @@ try:
         _date_str = f"{_py}/{_pm}/{_pd}"
     else:
         _date_str = _price_date_raw
-    st.caption(
+    _data_date_caption = (
         f"📅 最新股價/成交量資料日期：{_date_str}（TWSE 最近交易日）"
         f"｜支撐價計算區間：{start_str} ~ {end_str}"
     )
@@ -738,9 +743,25 @@ except Exception:
     pass
 
 display_df = make_display_df(build_alert_flags(df_result, rev_growth_min, rebound_max))
-render_bottom_result_overview(display_df, f"{support_months} 個月")
-render_alert_summary(display_df)
-render_bottom_table(display_df)
+st.subheader(f"📋 底部剛起漲名單（共 {count} 檔，以收盤價降冪排序）")
+tab_summary, tab_table, tab_diag = st.tabs(["結果總覽", "明細表", "診斷與資料"])
+with tab_summary:
+    render_bottom_result_overview(display_df, f"{support_months} 個月")
+    render_alert_summary(display_df)
+with tab_table:
+    render_bottom_table(display_df)
+with tab_diag:
+    if _data_date_caption:
+        st.caption(_data_date_caption)
+    st.write(
+        f"成交量+營收通過：{n_candidates} 檔｜"
+        f"歷史股價查詢：{n_targets} 檔｜"
+        f"可計算支撐價：{len(df_support)} 檔｜"
+        f"歷史資料不足/失敗：{len(history_failed)} 檔"
+    )
+    st.caption("以下為已成功計算近半年支撐價的股票，包含未通過起漲幅條件者。")
+    st.dataframe(_diag, use_container_width=True, hide_index=True)
+    st.caption("資料來源：股價/月營收來自 TWSE + TPEX OpenAPI；歷史股價來自 FinMind TaiwanStockPrice。")
 
 csv = dataframe_to_csv_bytes(display_df)
 st.download_button(
