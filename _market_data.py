@@ -171,7 +171,7 @@ def build_recent_revenue_metrics(df_rev: pd.DataFrame, months: int = 2) -> pd.Da
         df_top.groupby("stock_id")
         .agg(
             latest_rev_yoy=("rev_yoy", "first"),
-            prev_rev_yoy=("rev_yoy", lambda x: x.iloc[1] if len(x) > 1 else x.iloc[0]),
+            prev_rev_yoy=("rev_yoy", lambda x: x.iloc[1] if len(x) > 1 else pd.NA),
         )
         .reset_index()
     )
