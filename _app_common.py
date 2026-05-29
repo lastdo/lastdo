@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -30,3 +31,16 @@ def ensure_analysis_dir() -> Path:
     path = ROOT_DIR / "analysis"
     path.mkdir(exist_ok=True)
     return path
+
+
+def get_runtime_secret(key: str, default: str = "") -> str:
+    """Read secret from Streamlit Cloud first, then fallback to environment."""
+    try:
+        import streamlit as st
+
+        value = st.secrets.get(key)
+        if value not in (None, ""):
+            return str(value)
+    except Exception:
+        pass
+    return str(os.getenv(key, default))

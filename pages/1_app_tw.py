@@ -10,7 +10,7 @@ from groq import Groq
 import json
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from _app_common import ensure_analysis_dir
+from _app_common import ensure_analysis_dir, get_runtime_secret
 from _export_utils import CSV_ENCODING, dataframe_to_csv_bytes
 
 ANALYSIS_DIR = ensure_analysis_dir()
@@ -56,14 +56,14 @@ with st.sidebar:
 
     finmind_token = st.text_input(
         "FinMind Token（免費）",
-        value=os.getenv("FINMIND_TOKEN", ""),
+        value=get_runtime_secret("FINMIND_TOKEN", ""),
         type="password",
         help="請至 https://finmindtrade.com 免費註冊取得 Token（免費額度每日限 600 次請求）",
     ).strip()
 
     groq_api_key = st.text_input(
         "Groq API Key（完全免費）",
-        value=os.getenv("GROQ_API_KEY", ""),
+        value=get_runtime_secret("GROQ_API_KEY", ""),
         type="password",
         help="請至 https://console.groq.com 免費申請 API Key（無需信用卡）",
     ).strip()

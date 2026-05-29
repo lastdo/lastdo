@@ -18,6 +18,7 @@ from _finmind_api import (
 )
 from _market_data import build_latest_revenue_view, build_price_snapshot, build_revenue_snapshot
 from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
+from _app_common import FINMIND_URL, get_runtime_secret
 
 load_dotenv()
 
@@ -77,7 +78,6 @@ URL_TWSE_PRICE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 URL_TWSE_REV = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
 URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 URL_TPEX_REV = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"
-from _app_common import FINMIND_URL
 from _export_utils import dataframe_to_csv_bytes
 from _page_bootstrap import ROOT_DIR
 
@@ -146,7 +146,7 @@ with st.sidebar:
     st.markdown("**資料設定**")
     finmind_token = st.text_input(
         "FinMind Token（選填）",
-        value=os.getenv("FINMIND_TOKEN", ""),
+        value=get_runtime_secret("FINMIND_TOKEN", ""),
         type="password",
         help="用於查詢通過前置條件股票的近半年歷史股價；估值改採官方上市櫃API。",
     ).strip()
