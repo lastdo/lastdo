@@ -214,6 +214,31 @@ def render_chip_alert_summary(display_df: pd.DataFrame) -> None:
     col4.metric("買盤鈍化", flattened.count("買盤鈍化"))
     col5.metric("籌碼背離", flattened.count("籌碼背離"))
 
+
+def render_chip_tag_explainer(days_n: int, foreign_buy_min: float, pe_max: float, price_min: float, vol_min: int) -> None:
+    st.markdown(
+        f"""
+**標記說明（實際邏輯）**
+
+- 觀察區間：最近 **{days_n}** 個交易日。
+- 進入候選名單前，先通過主條件：
+  - 近N日外資累積買超 **>{foreign_buy_min:,.0f} 張**
+  - 本益比 **<{pe_max:.0f} 倍**
+  - 股價 **>{price_min:.0f} 元**
+  - 當日成交量 **>{int(vol_min):,} 張**
+
+| 標記 | 觸發條件（對應程式） |
+|---|---|
+| 外資連買 | `連買天數 >= 3` |
+| 籌碼加速 | `近N日買超 > 0` 且 (`近N日買超 >= 前N日買超 × 1.2` 或 `最新1日買超 >= 近N日累積買超 × 35%`) |
+| 價量配合 | `最新1日買超 > 0` 且 `最新1日買超 / 當日成交量 >= 8%` |
+| 買盤鈍化 | `連買天數 >= 2` 且 `前N日買超 > 0` 且 `近N日買超 < 前N日買超 × 0.8` |
+| 籌碼背離 | `近N日累積買超 > 0` 且 `最新1日買超 < 0` |
+| 正常 | 上述標記皆未觸發 |
+"""
+    )
+    st.caption("欄位對應：近N日買超=foreign_buy_window_lot、前N日買超=foreign_buy_prev_window_lot、最新1日買超=foreign_buy_latest_lot。")
+
 # ─────────────────────────────────────────────
 # 說明頁 / 恢復上次結果
 # ─────────────────────────────────────────────
@@ -272,10 +297,10 @@ if not run_btn:
         _count = len(_r)
         st.subheader(f"📋 外資籌碼重壓名單（共 {_count} 檔）")
         _disp = make_chip_display_df(build_chip_alert_flags(_r))
-        _tab_summary, _tab_table, _tab_diag = st.tabs(["結果總覽", "明細表", "診斷與資料"])
+        _tab_summary, _tab_table, _tab_diag = st.tabs(["標記說明", "明細表", "診斷與資料"])
         with _tab_summary:
-            render_chip_result_overview(_disp, f"{days_n} 日")
             render_chip_alert_summary(_disp)
+            render_chip_tag_explainer(days_n, foreign_buy_min, pe_max, price_min, int(vol_min))
         with _tab_table:
             render_chip_table(_disp)
         with _tab_diag:
@@ -627,10 +652,10 @@ except Exception:
 
 display_df = make_chip_display_df(build_chip_alert_flags(df_result))
 st.subheader(f"📋 外資籌碼重壓名單（共 {count} 檔，以收盤價降冪排序）")
-tab_summary, tab_table, tab_diag = st.tabs(["結果總覽", "明細表", "診斷與資料"])
+tab_summary, tab_table, tab_diag = st.tabs(["標記說明", "明細表", "診斷與資料"])
 with tab_summary:
-    render_chip_result_overview(display_df, f"{days_n} 日")
     render_chip_alert_summary(display_df)
+    render_chip_tag_explainer(days_n, foreign_buy_min, pe_max, price_min, int(vol_min))
 with tab_table:
     render_chip_table(display_df)
 with tab_diag:

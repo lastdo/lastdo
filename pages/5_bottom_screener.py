@@ -71,6 +71,35 @@ def render_alert_summary(display_df: pd.DataFrame) -> None:
     col4.metric("營收轉弱", flattened.count("營收轉弱"))
     col5.metric("反彈無量", flattened.count("反彈無量"))
 
+
+def render_bottom_tag_explainer(
+    support_months: int,
+    rebound_max: float,
+    rev_growth_min: float,
+    price_min: float,
+    vol_min: int,
+) -> None:
+    st.markdown(
+        f"""
+**標記說明（實際邏輯）**
+
+- 先通過主條件後才會進入候選或結果：
+  - 股價 `> {price_min:.0f}`、成交量 `>= {int(vol_min):,}`、單月營收年增 `> {rev_growth_min:.0f}%`
+  - 支撐價以近約 `{support_months}` 個月資料計算（程式使用最近60交易日 low 的 15% 分位）
+  - 結果名單再限制：`自底部漲幅` 需在 `0% ~ {rebound_max:.0f}%`
+
+| 標記 | 觸發條件（對應程式） |
+|---|---|
+| 貼近支撐 | `rebound_pct <= 3` |
+| 起漲初段 | `3 < rebound_pct <= 8` |
+| 空間縮小 | `rebound_pct >= max(反彈上限-3, 反彈上限×0.8)` |
+| 營收轉弱 | `rev_yoy < max(營收門檻+5, 10)` |
+| 反彈無量 | `rebound_pct > 3` 且 `latest_hist_vol_lot < avg_vol_20` |
+| 正常 | 以上標記皆未觸發 |
+"""
+    )
+    st.caption("欄位對應：rebound_pct=自底部漲幅、latest_hist_vol_lot=最新一日歷史量(張)、avg_vol_20=近20日均量(張)。")
+
 # ─────────────────────────────────────────────
 # API 端點
 # ─────────────────────────────────────────────
@@ -310,10 +339,10 @@ if not run_btn:
         st.info("💡 顯示上次選股結果。如需重新選股請點擊「開始選股」。")
         _disp = make_display_df(build_alert_flags(_r, rev_growth_min, rebound_max))
         st.subheader(f"📋 底部剛起漲名單（共 {len(_disp)} 檔）")
-        _tab_summary, _tab_table, _tab_diag = st.tabs(["結果總覽", "明細表", "診斷與資料"])
+        _tab_summary, _tab_table, _tab_diag = st.tabs(["標記說明", "明細表", "診斷與資料"])
         with _tab_summary:
-            render_bottom_result_overview(_disp, f"{support_months} 個月")
             render_alert_summary(_disp)
+            render_bottom_tag_explainer(support_months, rebound_max, rev_growth_min, price_min, int(vol_min))
         with _tab_table:
             render_bottom_table(_disp)
         with _tab_diag:
@@ -750,10 +779,10 @@ except Exception:
 
 display_df = make_display_df(build_alert_flags(df_result, rev_growth_min, rebound_max))
 st.subheader(f"📋 底部剛起漲名單（共 {count} 檔，以收盤價降冪排序）")
-tab_summary, tab_table, tab_diag = st.tabs(["結果總覽", "明細表", "診斷與資料"])
+tab_summary, tab_table, tab_diag = st.tabs(["標記說明", "明細表", "診斷與資料"])
 with tab_summary:
-    render_bottom_result_overview(display_df, f"{support_months} 個月")
     render_alert_summary(display_df)
+    render_bottom_tag_explainer(support_months, rebound_max, rev_growth_min, price_min, int(vol_min))
 with tab_table:
     render_bottom_table(display_df)
 with tab_diag:
