@@ -5,7 +5,7 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from _app_common import FINMIND_URL
+from _app_common import FINMIND_URL, get_runtime_secret
 from _finmind_api import (
     fetch_finmind_result,
     parse_eps_dataframe,
@@ -103,7 +103,7 @@ with st.sidebar:
     st.markdown("**資料設定**")
     finmind_token = st.text_input(
         "FinMind Token（選填）",
-        value=os.getenv("FINMIND_TOKEN", ""),
+        value=get_runtime_secret("FINMIND_TOKEN", ""),
         type="password",
         help="僅用於查詢季線（MA60）；本益比改採官方上市櫃API。",
     ).strip()

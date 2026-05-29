@@ -30,10 +30,17 @@ The app will create these headers automatically if the sheet is empty:
 In Streamlit Community Cloud, add these secrets:
 
 ```toml
+# Optional API keys used by pages
+FINMIND_TOKEN = "your_finmind_token"
+GROQ_API_KEY = "your_groq_api_key"
+
+# Portfolio storage settings
 PORTFOLIO_USE_GOOGLE_SHEETS = true
 PORTFOLIO_DEFAULT_FAMILY_ID = "lwh38009"
 GOOGLE_SHEETS_PORTFOLIO_SPREADSHEET_ID = "your_google_sheet_id"
 GOOGLE_SHEETS_PORTFOLIO_WORKSHEET = "holdings"
+# Optional: if you want the in-app edit link to open a specific tab
+# GOOGLE_SHEETS_PORTFOLIO_WORKSHEET_GID = "0"
 
 [GOOGLE_SERVICE_ACCOUNT]
 type = "service_account"
@@ -48,6 +55,14 @@ auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
 client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/your-service-account"
 universe_domain = "googleapis.com"
 ```
+
+## 3.1 Open web Google Sheet for family editing
+
+1. Open your Google Sheet in a browser:
+   - `https://docs.google.com/spreadsheets/d/<your_google_sheet_id>/edit`
+2. Click **Share** and add your family members as **Editor**.
+3. Ask your family to edit the `holdings` worksheet directly.
+4. Keep `family_id` consistent with the app sidebar value (default `lwh38009`) if multiple households share one sheet.
 
 ## 4. Migration behavior
 

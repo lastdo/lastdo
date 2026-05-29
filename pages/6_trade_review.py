@@ -4,7 +4,7 @@ from datetime import datetime, time
 import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
-from _app_common import ensure_analysis_dir
+from _app_common import ensure_analysis_dir, get_runtime_secret
 
 load_dotenv()
 
@@ -193,7 +193,7 @@ with st.sidebar:
     st.divider()
     groq_api_key = st.text_input(
         "Groq API Key",
-        value=os.getenv("GROQ_API_KEY", ""),
+        value=get_runtime_secret("GROQ_API_KEY", ""),
         type="password",
         help="用於產生嚴格交易審查報告。",
     ).strip()

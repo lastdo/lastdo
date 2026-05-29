@@ -170,6 +170,18 @@ def _google_sheets_enabled() -> bool:
     return _is_truthy(secrets.get("PORTFOLIO_USE_GOOGLE_SHEETS", False))
 
 
+def get_google_sheet_edit_url() -> str:
+    secrets = _secrets()
+    spreadsheet_id = str(secrets.get("GOOGLE_SHEETS_PORTFOLIO_SPREADSHEET_ID", "")).strip()
+    if not spreadsheet_id:
+        return ""
+    url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
+    worksheet_gid = str(secrets.get("GOOGLE_SHEETS_PORTFOLIO_WORKSHEET_GID", "")).strip()
+    if worksheet_gid.isdigit():
+        url = f"{url}#gid={worksheet_gid}"
+    return url
+
+
 def _google_config_available() -> bool:
     secrets = _secrets()
     return bool(
@@ -219,7 +231,7 @@ def _get_worksheet():
 def _ensure_headers(worksheet) -> None:
     current_headers = worksheet.row_values(1)
     if current_headers[: len(WORKSHEET_HEADERS)] != WORKSHEET_HEADERS:
-        worksheet.update("A1:J1", [WORKSHEET_HEADERS])
+        worksheet.update(values=[WORKSHEET_HEADERS], range_name="A1:J1")
 
 
 def _sheet_records() -> list[dict[str, Any]]:

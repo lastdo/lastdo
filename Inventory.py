@@ -10,6 +10,7 @@ from _portfolio_store import (
     create_portfolio_item,
     delete_portfolio_item,
     get_default_family_id,
+    get_google_sheet_edit_url,
     get_store_status,
     list_family_ids,
     load_portfolio as load_portfolio_items,
@@ -358,6 +359,10 @@ with st.sidebar:
         st.caption("已知 family_id：" + ", ".join(known_family_ids[:8]))
     if store_status.using_google_sheets:
         st.caption("持股儲存：Google Sheets")
+        _sheet_edit_url = get_google_sheet_edit_url()
+        if _sheet_edit_url:
+            st.markdown(f"[開啟 Google Sheet 編輯庫存](<{_sheet_edit_url}>)")
+            st.caption("請切到 holdings 工作表編輯；家人需先取得該 Sheet 的編輯權限。")
     elif store_status.configured:
         st.caption("持股儲存：本機 portfolio.json")
     else:
