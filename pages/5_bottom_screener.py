@@ -436,10 +436,16 @@ def calc_bottom_support(row: pd.Series, history_df: pd.DataFrame):
         return None
     history_df = history_df.sort_values("date").reset_index(drop=True).copy()
     history_df["vol_lot_hist"] = pd.to_numeric(history_df["volume"], errors="coerce") / 1000
-    low_idx = history_df["low"].idxmin()
-    support_price = float(history_df.loc[low_idx, "low"])
+    recent_window = history_df.tail(60).dropna(subset=["low"]).copy()
+    if recent_window.empty:
+        return None
+
+    # Use a robust recent support level to avoid one-day tail-risk lows dominating the signal.
+    support_price = float(pd.to_numeric(recent_window["low"], errors="coerce").quantile(0.15))
     if support_price <= 0:
         return None
+    support_touches = recent_window[recent_window["low"] <= support_price * 1.03]
+    support_row = support_touches.iloc[-1] if not support_touches.empty else recent_window.loc[recent_window["low"].idxmin()]
     latest_close = float(row["close"])
     rebound_pct = (latest_close / support_price - 1) * 100
     latest_row = history_df.iloc[-1]
@@ -454,7 +460,7 @@ def calc_bottom_support(row: pd.Series, history_df: pd.DataFrame):
         "rev_cur": row["rev_cur"],
         "rev_ly": row["rev_ly"],
         "support_price": support_price,
-        "support_date": history_df.loc[low_idx, "date"].strftime("%Y-%m-%d"),
+        "support_date": pd.to_datetime(support_row["date"]).strftime("%Y-%m-%d"),
         "rebound_pct": rebound_pct,
         "history_days": len(history_df),
         "avg_vol_20": float(history_df["vol_lot_hist"].tail(20).mean()) if history_df["vol_lot_hist"].tail(20).notna().any() else None,

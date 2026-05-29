@@ -121,8 +121,14 @@ def build_chip_alert_flags(result_df: pd.DataFrame) -> pd.DataFrame:
     def _flags(row: pd.Series) -> str:
         flags = []
         foreign_total = pd.to_numeric(row.get("foreign_net_buy_lot"), errors="coerce")
-        recent3 = pd.to_numeric(row.get("foreign_buy_3d_lot"), errors="coerce")
-        prev3 = pd.to_numeric(row.get("foreign_buy_prev3d_lot"), errors="coerce")
+        recent_window = pd.to_numeric(
+            row.get("foreign_buy_window_lot", row.get("foreign_buy_3d_lot")),
+            errors="coerce",
+        )
+        prev_window = pd.to_numeric(
+            row.get("foreign_buy_prev_window_lot", row.get("foreign_buy_prev3d_lot")),
+            errors="coerce",
+        )
         latest1 = pd.to_numeric(row.get("foreign_buy_latest_lot"), errors="coerce")
         streak = pd.to_numeric(row.get("foreign_buy_streak"), errors="coerce")
         vol_lot = pd.to_numeric(row.get("vol_lot"), errors="coerce")
@@ -131,10 +137,10 @@ def build_chip_alert_flags(result_df: pd.DataFrame) -> pd.DataFrame:
             flags.append("外資連買")
 
         if (
-            pd.notna(recent3)
-            and recent3 > 0
+            pd.notna(recent_window)
+            and recent_window > 0
             and (
-                (pd.notna(prev3) and prev3 > 0 and recent3 >= prev3 * 1.2)
+                (pd.notna(prev_window) and prev_window > 0 and recent_window >= prev_window * 1.2)
                 or (pd.notna(latest1) and pd.notna(foreign_total) and latest1 >= foreign_total * 0.35)
             )
         ):
@@ -152,10 +158,10 @@ def build_chip_alert_flags(result_df: pd.DataFrame) -> pd.DataFrame:
         if (
             pd.notna(streak)
             and streak >= 2
-            and pd.notna(recent3)
-            and pd.notna(prev3)
-            and prev3 > 0
-            and recent3 < prev3 * 0.8
+            and pd.notna(recent_window)
+            and pd.notna(prev_window)
+            and prev_window > 0
+            and recent_window < prev_window * 0.8
         ):
             flags.append("買盤鈍化")
 
@@ -486,6 +492,7 @@ _df_inst_sum["foreign_net_buy_lot"] = _df_inst_sum["foreign_net_shares"] / 1000 
 
 _df_inst_all["trade_date"] = pd.to_datetime(_df_inst_all["trade_date"])
 _df_inst_all["foreign_net_buy_lot"] = pd.to_numeric(_df_inst_all["foreign_net_shares"], errors="coerce").fillna(0) / 1000
+_chip_window = max(int(days_n), 1)
 
 
 def _chip_metrics(group: pd.DataFrame) -> pd.Series:
@@ -499,14 +506,16 @@ def _chip_metrics(group: pd.DataFrame) -> pd.Series:
         else:
             break
 
-    recent3 = sum(values[:3]) if values else 0
-    prev3 = sum(values[3:6]) if len(values) > 3 else 0
+    recent_window = sum(values[:_chip_window]) if values else 0
+    prev_window = sum(values[_chip_window : _chip_window * 2]) if len(values) > _chip_window else 0
     latest1 = values[0] if values else 0
 
     return pd.Series({
         "foreign_buy_streak": streak,
-        "foreign_buy_3d_lot": recent3,
-        "foreign_buy_prev3d_lot": prev3,
+        "foreign_buy_window_lot": recent_window,
+        "foreign_buy_prev_window_lot": prev_window,
+        "foreign_buy_3d_lot": recent_window,
+        "foreign_buy_prev3d_lot": prev_window,
         "foreign_buy_latest_lot": latest1,
     })
 
