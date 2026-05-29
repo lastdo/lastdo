@@ -1,9 +1,11 @@
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 import pandas as pd
+import plotly.graph_objects as go
 import requests
 import streamlit as st
 from dotenv import load_dotenv
@@ -18,8 +20,12 @@ from _finmind_api import (
 from _market_data import build_latest_revenue_view, build_price_snapshot, build_revenue_snapshot
 from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
 from _app_common import FINMIND_URL, get_runtime_secret
+from _portfolio_store import create_portfolio_item, get_default_family_id, load_portfolio
 
 load_dotenv()
+
+RESULT_VIEW_OPTIONS = ["標記說明", "明細表", "診斷與資料"]
+FAMILY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def build_alert_flags(result_df: pd.DataFrame, rev_growth_floor: float, rebound_ceiling: float) -> pd.DataFrame:
@@ -169,6 +175,14 @@ st.caption("本頁優先處理底部型態、營收動能與短線技術位階�
 with st.sidebar:
     render_global_navigation("bottom_screener")
     st.markdown("---")
+    st.markdown("**自選股設定**")
+    st.text_input(
+        "family_id",
+        value=st.session_state.get("inventory_family_id", get_default_family_id()),
+        key="inventory_family_id",
+        help="加入自選股時會寫入這組 family_id，與庫存股頁共用。",
+    )
+    st.divider()
     st.header("⚙️ 選股條件")
     st.divider()
     st.markdown("**資料設定**")
@@ -315,19 +329,124 @@ def render_bottom_table(display_df: pd.DataFrame) -> None:
     )
 
 
+def render_result_view_selector(key: str, default: str = "標記說明") -> str:
+    current = st.session_state.get(key, default)
+    if current not in RESULT_VIEW_OPTIONS:
+        current = default
+    return st.radio(
+        "結果檢視",
+        RESULT_VIEW_OPTIONS,
+        index=RESULT_VIEW_OPTIONS.index(current),
+        key=key,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+
+def render_watchlist_adder(result_df: pd.DataFrame, family_id: str, finmind_token: str = "") -> None:
+    if result_df.empty:
+        return
+
+    def _fmt_number(value, suffix: str = "") -> str:
+        return f"{value:.2f}{suffix}" if pd.notna(value) else f"—{suffix}"
+
+    portfolio_items = load_portfolio(family_id)
+    existing_symbols = {
+        str(item.get("stock_id") or item.get("symbol") or "").strip()
+        for item in portfolio_items
+    }
+
+    action_df = result_df[["stock_id", "stock_name", "market", "close", "rev_yoy", "support_price"]].copy()
+    action_df["close"] = pd.to_numeric(action_df["close"], errors="coerce")
+    action_df["rev_yoy"] = pd.to_numeric(action_df["rev_yoy"], errors="coerce")
+    action_df["support_price"] = pd.to_numeric(action_df["support_price"], errors="coerce")
+    action_df["label"] = action_df.apply(
+        lambda row: (
+            f"{row['stock_id']} {row['stock_name']} | {row['market']} | "
+            f"收盤 {_fmt_number(row['close'])} | "
+            f"營收年增 {_fmt_number(row['rev_yoy'], '%')} | "
+            f"支撐價 {_fmt_number(row['support_price'])}"
+        ),
+        axis=1,
+    )
+    options = action_df.to_dict("records")
+    default_index = next((idx for idx, row in enumerate(options) if row["stock_id"] not in existing_symbols), 0)
+
+    st.markdown("#### 加入庫存股自選名單")
+    st.caption(f"目標 family_id：`{family_id}`。加入後會以「自選股」形式出現在庫存股頁，不會填入持有成本與股數。")
+    selected = st.selectbox(
+        "選擇要加入自選股的股票",
+        options=options,
+        index=default_index,
+        format_func=lambda row: row["label"],
+        key="bottom_watchlist_symbol",
+    )
+
+    selected_symbol = str(selected["stock_id"]).strip()
+    already_exists = selected_symbol in existing_symbols
+    end_date = datetime.today().date().strftime("%Y-%m-%d")
+    start_date = (datetime.today().date() - timedelta(days=220)).strftime("%Y-%m-%d")
+    chart_df = get_finmind_price_history(selected_symbol, start_date, end_date, finmind_token)
+
+    st.markdown("#### 技術線型")
+    if chart_df.empty:
+        st.info("這檔股票暫時抓不到技術線型資料，請稍後再試。")
+    else:
+        chart_df = chart_df.copy().sort_values("date").reset_index(drop=True)
+        chart_df["ma20"] = chart_df["close"].rolling(20, min_periods=1).mean()
+        chart_df["ma60"] = chart_df["close"].rolling(60, min_periods=1).mean()
+        chart_df = chart_df.tail(120)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=chart_df["date"], y=chart_df["close"], mode="lines", name="收盤價", line=dict(color="#1d4ed8", width=2.5)))
+        fig.add_trace(go.Scatter(x=chart_df["date"], y=chart_df["ma20"], mode="lines", name="MA20", line=dict(color="#f59e0b", width=1.8)))
+        fig.add_trace(go.Scatter(x=chart_df["date"], y=chart_df["ma60"], mode="lines", name="MA60", line=dict(color="#16a34a", width=2)))
+        if pd.notna(pd.to_numeric(selected.get("support_price"), errors="coerce")):
+            fig.add_hline(y=float(selected["support_price"]), line_dash="dot", line_color="#dc2626", annotation_text="支撐價")
+        fig.update_layout(height=300, margin=dict(l=8, r=8, t=10, b=8), paper_bgcolor="white", plot_bgcolor="white", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+        fig.update_xaxes(showgrid=False, title=None)
+        fig.update_yaxes(showgrid=True, gridcolor="#e5edf7", title=None)
+        st.plotly_chart(fig, use_container_width=True)
+
+    latest_ma60 = chart_df["close"].rolling(60, min_periods=1).mean().iloc[-1] if not chart_df.empty else None
+    rebound = ((selected["close"] / selected["support_price"]) - 1) * 100 if pd.notna(selected.get("close")) and pd.notna(selected.get("support_price")) and selected["support_price"] else None
+    st.caption(
+        f"目前收盤 {_fmt_number(pd.to_numeric(selected.get('close'), errors='coerce'))}｜"
+        f"MA60 {_fmt_number(latest_ma60)}｜"
+        f"距支撐價反彈 {_fmt_number(rebound, '%')}"
+    )
+    if already_exists:
+        st.info(f"{selected_symbol} 已經在這組 family_id 的持股 / 自選股清單中。")
+
+    if st.button("加入自選股", type="primary", disabled=already_exists, use_container_width=True, key="bottom_watchlist_add"):
+        create_portfolio_item(
+            family_id=family_id,
+            stock_id=selected_symbol,
+            stock_name=str(selected["stock_name"]).strip(),
+        )
+        st.success(f"已將 {selected_symbol} {selected['stock_name']} 加入自選股。")
+        st.rerun()
+
+
+family_id = st.session_state.get("inventory_family_id", get_default_family_id()).strip()
+if not FAMILY_ID_PATTERN.fullmatch(family_id):
+    st.error("family_id 格式錯誤，僅能使用英文字母、數字、底線(_)或連字號(-)，長度 1-64。")
+    st.stop()
+
+
 if not run_btn:
     if "bottom_screener_result" in st.session_state:
         _r = st.session_state["bottom_screener_result"]
         st.info("💡 顯示上次選股結果。如需重新選股請點擊「開始選股」。")
         _disp = make_display_df(build_alert_flags(_r, rev_growth_min, rebound_max))
         st.subheader(f"📋 底部剛起漲名單（共 {len(_disp)} 檔）")
-        _tab_summary, _tab_table, _tab_diag = st.tabs(["標記說明", "明細表", "診斷與資料"])
-        with _tab_summary:
+        _view = render_result_view_selector("bottom_result_view")
+        if _view == "標記說明":
             render_alert_summary(_disp)
             render_bottom_tag_explainer(support_months, rebound_max, rev_growth_min, price_min, int(vol_min))
-        with _tab_table:
+        elif _view == "明細表":
             render_bottom_table(_disp)
-        with _tab_diag:
+            render_watchlist_adder(_r, family_id, finmind_token)
+        else:
             st.caption("這是上次執行結果；若要更新資料，請重新執行篩選。")
             st.caption("資料來源：股價/月營收來自 TWSE + TPEX OpenAPI；歷史股價來自 FinMind TaiwanStockPrice。")
         _csv = dataframe_to_csv_bytes(_disp)
@@ -674,13 +793,14 @@ except Exception:
 
 display_df = make_display_df(build_alert_flags(df_result, rev_growth_min, rebound_max))
 st.subheader(f"📋 底部剛起漲名單（共 {count} 檔，以收盤價降冪排序）")
-tab_summary, tab_table, tab_diag = st.tabs(["標記說明", "明細表", "診斷與資料"])
-with tab_summary:
+view = render_result_view_selector("bottom_result_view")
+if view == "標記說明":
     render_alert_summary(display_df)
     render_bottom_tag_explainer(support_months, rebound_max, rev_growth_min, price_min, int(vol_min))
-with tab_table:
+elif view == "明細表":
     render_bottom_table(display_df)
-with tab_diag:
+    render_watchlist_adder(df_result, family_id, finmind_token)
+else:
     if _data_date_caption:
         st.caption(_data_date_caption)
     st.write(

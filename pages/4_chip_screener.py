@@ -1,6 +1,9 @@
 import os
+import re
+import requests
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from _institutional_flow import (
@@ -9,9 +12,14 @@ from _institutional_flow import (
 )
 from _market_data import build_price_snapshot
 from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
+from _portfolio_store import create_portfolio_item, get_default_family_id, load_portfolio
 from _public_valuation import attach_public_valuation, fetch_public_pe_ratios
+from _app_common import FINMIND_URL, get_runtime_secret
 
 load_dotenv()
+
+RESULT_VIEW_OPTIONS = ["標記說明", "明細表", "診斷與資料"]
+FAMILY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 # ─────────────────────────────────────────────
 # API 端點
@@ -81,6 +89,20 @@ st.caption("本頁重點是看外資籌碼有沒有持續集中、加速或背�
 with st.sidebar:
     render_global_navigation("chip_screener")
     st.markdown("---")
+    st.markdown("**自選股設定**")
+    st.text_input(
+        "family_id",
+        value=st.session_state.get("inventory_family_id", get_default_family_id()),
+        key="inventory_family_id",
+        help="加入自選股時會寫入這組 family_id，與庫存股頁共用。",
+    )
+    finmind_token = st.text_input(
+        "FinMind Token（選填）",
+        value=get_runtime_secret("FINMIND_TOKEN", ""),
+        type="password",
+        help="用於下方技術線型圖查詢近幾個月股價資料。",
+    ).strip()
+    st.divider()
     st.header("⚙️ 選股條件")
     st.divider()
     st.markdown("**觀察區間**")
@@ -273,6 +295,133 @@ def render_chip_table(display_df: pd.DataFrame) -> None:
     )
 
 
+def render_result_view_selector(key: str, default: str = "標記說明") -> str:
+    current = st.session_state.get(key, default)
+    if current not in RESULT_VIEW_OPTIONS:
+        current = default
+    return st.radio(
+        "結果檢視",
+        RESULT_VIEW_OPTIONS,
+        index=RESULT_VIEW_OPTIONS.index(current),
+        key=key,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_finmind_price_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
+    start_date = (datetime.today() - timedelta(days=220)).strftime("%Y-%m-%d")
+    params = {
+        "dataset": "TaiwanStockPrice",
+        "data_id": symbol,
+        "start_date": start_date,
+        "end_date": datetime.today().strftime("%Y-%m-%d"),
+    }
+    if token:
+        params["token"] = token
+
+    try:
+        result = requests.get(FINMIND_URL, params=params, timeout=20).json()
+        if int(result.get("status", 0) or 0) != 200 or not result.get("data"):
+            return pd.DataFrame()
+        df = pd.DataFrame(result["data"])
+        if df.empty or "date" not in df.columns or "close" not in df.columns:
+            return pd.DataFrame()
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        df = df.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
+        if df.empty:
+            return pd.DataFrame()
+        df["ma20"] = df["close"].rolling(20, min_periods=1).mean()
+        df["ma60"] = df["close"].rolling(60, min_periods=1).mean()
+        return df.tail(120).reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame()
+
+
+def render_watchlist_adder(result_df: pd.DataFrame, family_id: str, finmind_token: str = "") -> None:
+    if result_df.empty:
+        return
+
+    def _fmt_number(value, suffix: str = "") -> str:
+        return f"{value:.2f}{suffix}" if pd.notna(value) else f"—{suffix}"
+
+    portfolio_items = load_portfolio(family_id)
+    existing_symbols = {
+        str(item.get("stock_id") or item.get("symbol") or "").strip()
+        for item in portfolio_items
+    }
+
+    action_df = result_df[["stock_id", "stock_name", "market", "close", "foreign_net_buy_lot", "pe_ratio"]].copy()
+    action_df["close"] = pd.to_numeric(action_df["close"], errors="coerce")
+    action_df["foreign_net_buy_lot"] = pd.to_numeric(action_df["foreign_net_buy_lot"], errors="coerce")
+    action_df["pe_ratio"] = pd.to_numeric(action_df["pe_ratio"], errors="coerce")
+    action_df["label"] = action_df.apply(
+        lambda row: (
+            f"{row['stock_id']} {row['stock_name']} | {row['market']} | "
+            f"收盤 {_fmt_number(row['close'])} | "
+            f"外資近N日買超 {_fmt_number(row['foreign_net_buy_lot'])} 張 | "
+            f"PE {_fmt_number(row['pe_ratio'])}"
+        ),
+        axis=1,
+    )
+    options = action_df.to_dict("records")
+    default_index = next((idx for idx, row in enumerate(options) if row["stock_id"] not in existing_symbols), 0)
+
+    st.markdown("#### 加入庫存股自選名單")
+    st.caption(f"目標 family_id：`{family_id}`。加入後會以「自選股」形式出現在庫存股頁，不會填入持有成本與股數。")
+    selected = st.selectbox(
+        "選擇要加入自選股的股票",
+        options=options,
+        index=default_index,
+        format_func=lambda row: row["label"],
+        key="chip_watchlist_symbol",
+    )
+
+    selected_symbol = str(selected["stock_id"]).strip()
+    already_exists = selected_symbol in existing_symbols
+    chart_df = get_finmind_price_chart_data(selected_symbol, finmind_token)
+
+    st.markdown("#### 技術線型")
+    if chart_df.empty:
+        st.info("這檔股票暫時抓不到技術線型資料，請稍後再試。")
+    else:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=chart_df["date"], y=chart_df["close"], mode="lines", name="收盤價", line=dict(color="#1d4ed8", width=2.5)))
+        fig.add_trace(go.Scatter(x=chart_df["date"], y=chart_df["ma20"], mode="lines", name="MA20", line=dict(color="#f59e0b", width=1.8)))
+        fig.add_trace(go.Scatter(x=chart_df["date"], y=chart_df["ma60"], mode="lines", name="MA60", line=dict(color="#16a34a", width=2)))
+        fig.update_layout(height=300, margin=dict(l=8, r=8, t=10, b=8), paper_bgcolor="white", plot_bgcolor="white", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+        fig.update_xaxes(showgrid=False, title=None)
+        fig.update_yaxes(showgrid=True, gridcolor="#e5edf7", title=None)
+        st.plotly_chart(fig, use_container_width=True)
+
+    latest_ma60 = chart_df["ma60"].iloc[-1] if not chart_df.empty else None
+    premium = ((selected["close"] / latest_ma60) - 1) * 100 if pd.notna(selected.get("close")) and pd.notna(latest_ma60) and latest_ma60 else None
+    st.caption(
+        f"目前收盤 {_fmt_number(pd.to_numeric(selected.get('close'), errors='coerce'))}｜"
+        f"MA60 {_fmt_number(latest_ma60)}｜"
+        f"季線溢價 {_fmt_number(premium, '%')}"
+    )
+    if already_exists:
+        st.info(f"{selected_symbol} 已經在這組 family_id 的持股 / 自選股清單中。")
+
+    if st.button("加入自選股", type="primary", disabled=already_exists, use_container_width=True, key="chip_watchlist_add"):
+        create_portfolio_item(
+            family_id=family_id,
+            stock_id=selected_symbol,
+            stock_name=str(selected["stock_name"]).strip(),
+        )
+        st.success(f"已將 {selected_symbol} {selected['stock_name']} 加入自選股。")
+        st.rerun()
+
+
+family_id = st.session_state.get("inventory_family_id", get_default_family_id()).strip()
+if not FAMILY_ID_PATTERN.fullmatch(family_id):
+    st.error("family_id 格式錯誤，僅能使用英文字母、數字、底線(_)或連字號(-)，長度 1-64。")
+    st.stop()
+
+
 if not run_btn:
     if "chip_screener_result" in st.session_state:
         _r = st.session_state["chip_screener_result"]
@@ -280,13 +429,14 @@ if not run_btn:
         _count = len(_r)
         st.subheader(f"📋 外資籌碼重壓名單（共 {_count} 檔）")
         _disp = make_chip_display_df(build_chip_alert_flags(_r))
-        _tab_summary, _tab_table, _tab_diag = st.tabs(["標記說明", "明細表", "診斷與資料"])
-        with _tab_summary:
+        _view = render_result_view_selector("chip_result_view")
+        if _view == "標記說明":
             render_chip_alert_summary(_disp)
             render_chip_tag_explainer(days_n, foreign_buy_min, pe_max, price_min, int(vol_min))
-        with _tab_table:
+        elif _view == "明細表":
             render_chip_table(_disp)
-        with _tab_diag:
+            render_watchlist_adder(_r, family_id, finmind_token)
+        else:
             st.caption("這是上次執行結果；若要更新資料，請重新執行篩選。")
             st.caption("資料來源：股價為 TWSE + TPEX OpenAPI；外資買賣超為 TWSE + TPEX；本益比為官方上市櫃 API。")
         _csv = dataframe_to_csv_bytes(_disp)
@@ -635,13 +785,14 @@ except Exception:
 
 display_df = make_chip_display_df(build_chip_alert_flags(df_result))
 st.subheader(f"📋 外資籌碼重壓名單（共 {count} 檔，以收盤價降冪排序）")
-tab_summary, tab_table, tab_diag = st.tabs(["標記說明", "明細表", "診斷與資料"])
-with tab_summary:
+view = render_result_view_selector("chip_result_view")
+if view == "標記說明":
     render_chip_alert_summary(display_df)
     render_chip_tag_explainer(days_n, foreign_buy_min, pe_max, price_min, int(vol_min))
-with tab_table:
+elif view == "明細表":
     render_chip_table(display_df)
-with tab_diag:
+    render_watchlist_adder(df_result, family_id, finmind_token)
+else:
     if _data_date_caption:
         st.caption(_data_date_caption)
     st.write(
