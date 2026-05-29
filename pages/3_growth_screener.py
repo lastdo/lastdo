@@ -229,6 +229,29 @@ def render_growth_alert_summary(display_df: pd.DataFrame) -> None:
     col5.metric("價格領先", flattened.count("價格領先"))
 
 
+def render_growth_tag_explainer(pe_max: float, rev_growth_min: float) -> None:
+    st.markdown(
+        f"""
+**標記說明（實際邏輯）**
+
+- 先通過主條件後才會進入名單：
+  - 本益比 `< {pe_max:.0f}`、近2月平均營收年增 `> {rev_growth_min:.0f}%`
+  - 成交量、股價門檻依左側設定
+  - 季線限制：收盤價不可高於 MA60 的 12%
+
+| 標記 | 觸發條件（對應程式） |
+|---|---|
+| 趨勢續強 | `avg_rev_yoy >= max(門檻+10, 30)` 且 `latest_rev_yoy > 0` 且 `prev_rev_yoy > 0` 且 `|latest-prev| <= 20` |
+| 成長失真 | `|latest_rev_yoy - prev_rev_yoy| >= 35` |
+| 獲利未跟上 | `avg_rev_yoy >= max(門檻, 20)` 且 `pe_ratio >= max(PE上限×0.75, 18)` |
+| 估值過熱 | `pe_ratio >= max(PE上限×0.9, 18)` 且 `pe_ratio > avg_rev_yoy × 0.8` |
+| 價格領先 | `season_line_premium >= 8%` 且 `latest_rev_yoy <= prev_rev_yoy + 5` |
+| 正常 | 以上標記皆未觸發 |
+"""
+    )
+    st.caption("欄位對應：latest/prev 為最近兩個營收月份年增率。若僅有單月資料，該類雙月比較標記不會觸發。")
+
+
 def render_growth_result_overview(display_df: pd.DataFrame, data_month: str) -> None:
     if display_df.empty or "警示標記" not in display_df.columns:
         return
@@ -279,10 +302,10 @@ if not run_btn:
         _rev_ym = _r["rev_ym"].iloc[0] if _count > 0 else "-"
         st.subheader(f"成長股策略結果：{_count} 檔（最新營收月份：{_rev_ym}）")
         _disp = make_growth_display_df(build_growth_alert_flags(_r, pe_max, rev_growth_min))
-        _tab_summary, _tab_table, _tab_diag = st.tabs(["結果總覽", "明細表", "診斷與資料"])
+        _tab_summary, _tab_table, _tab_diag = st.tabs(["標記說明", "明細表", "診斷與資料"])
         with _tab_summary:
-            render_growth_result_overview(_disp, _rev_ym)
             render_growth_alert_summary(_disp)
+            render_growth_tag_explainer(pe_max, rev_growth_min)
         with _tab_table:
             render_growth_table(_disp)
         with _tab_diag:
@@ -558,10 +581,10 @@ except Exception:
 
 display_df = make_growth_display_df(build_growth_alert_flags(df_result, pe_max, rev_growth_min))
 st.subheader(f"成長股策略結果：{count} 檔（最新營收月份：{rev_ym}）")
-tab_summary, tab_table, tab_diag = st.tabs(["結果總覽", "明細表", "診斷與資料"])
+tab_summary, tab_table, tab_diag = st.tabs(["標記說明", "明細表", "診斷與資料"])
 with tab_summary:
-    render_growth_result_overview(display_df, rev_ym)
     render_growth_alert_summary(display_df)
+    render_growth_tag_explainer(pe_max, rev_growth_min)
 with tab_table:
     render_growth_table(display_df)
 with tab_diag:
