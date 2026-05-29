@@ -252,6 +252,45 @@ div[data-testid="stTabs"] button[aria-selected="true"] {
     color: var(--accent-primary) !important;
 }
 
+div[data-testid="stSelectbox"] label p {
+    font-weight: 700 !important;
+    color: var(--text-primary) !important;
+}
+div[data-testid="stSelectbox"] > div[data-baseweb="select"] > div {
+    border: 2px solid #7fb0ff !important;
+    border-radius: 10px !important;
+    background: #ffffff !important;
+    box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.08) !important;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease !important;
+}
+div[data-testid="stSelectbox"] > div[data-baseweb="select"] > div:hover,
+div[data-testid="stSelectbox"] > div[data-baseweb="select"] > div:focus-within {
+    border-color: var(--accent-primary) !important;
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.16) !important;
+}
+
+.watchlist-tech-card {
+    margin-top: 10px;
+    margin-bottom: 14px;
+    padding: 12px 14px;
+    background: linear-gradient(180deg, #f8fbff 0%, #eef5ff 100%);
+    border: 1px solid #bfd6ff;
+    border-left: 4px solid var(--accent-primary);
+    border-radius: 12px;
+    box-shadow: var(--shadow-soft);
+}
+.watchlist-tech-title {
+    font-size: 0.82rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+}
+.watchlist-tech-body {
+    font-size: 0.92rem;
+    color: var(--text-primary);
+    line-height: 1.55;
+}
+
 .stButton > button[kind="primary"] {
     background: linear-gradient(135deg, var(--bg-header-end), #4f8df7) !important;
     border: none !important;
