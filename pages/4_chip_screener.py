@@ -242,23 +242,6 @@ def render_chip_tag_explainer(days_n: int, foreign_buy_min: float, pe_max: float
 # ─────────────────────────────────────────────
 # 說明頁 / 恢復上次結果
 # ─────────────────────────────────────────────
-def render_chip_result_overview(display_df: pd.DataFrame, window_label: str) -> None:
-    alert_col = "警示標記" if "警示標記" in display_df.columns else "霅衣內璅?"
-    if display_df.empty or alert_col not in display_df.columns:
-        return
-
-    alerts = display_df[alert_col].astype(str)
-    positive_count = alerts.str.contains("外資連買|籌碼加速|價量配合", regex=True).sum()
-    risk_count = alerts.str.contains("買盤鈍化|籌碼背離", regex=True).sum()
-    normal_count = (alerts == "正常").sum()
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("候選檔數", f"{len(display_df)} 檔")
-    col2.metric("正向訊號", int(positive_count))
-    col3.metric("風險訊號", int(risk_count))
-    col4.metric("正常觀察", int(normal_count), help=f"觀察區間：{window_label}")
-
-
 def render_chip_table(display_df: pd.DataFrame) -> None:
     alert_col = "警示標記" if "警示標記" in display_df.columns else "霅衣內璅?"
     code_col = "股票代碼" if "股票代碼" in display_df.columns else "?∠巨隞?Ⅳ"

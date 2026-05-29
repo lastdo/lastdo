@@ -1,5 +1,6 @@
 import streamlit as st
 from datetime import datetime
+import re
 
 import pandas as pd
 import plotly.express as px
@@ -24,6 +25,7 @@ BROKER_FEE_RATE = 0.001425
 STOCK_SELL_TAX_RATE = 0.003
 URL_TWSE_PRICE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
+FAMILY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def _parse_market_number(value):
@@ -106,17 +108,6 @@ def fetch_market_snapshot() -> dict:
         pass
 
     return snapshot
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_all_stock_names() -> dict:
-    try:
-        return {
-            stock_id: info.get("stock_name", "")
-            for stock_id, info in fetch_market_snapshot().items()
-        }
-    except Exception:
-        return {}
 
 
 st.set_page_config(page_title="庫存股管理", page_icon="💼", layout="wide")
@@ -307,6 +298,7 @@ def build_portfolio_rows(portfolio: list, stock_names: dict, market_snapshot: di
         )
 
         rows.append({
+            "row_id": str(stock.get("row_id", "")).strip(),
             "symbol": symbol,
             "name": stock_names.get(symbol, ""),
             "type": "持股" if is_holding else "自選股",
@@ -369,6 +361,9 @@ with st.sidebar:
         st.warning(store_status.message)
 
 family_id = st.session_state.get("inventory_family_id", get_default_family_id()).strip()
+if not FAMILY_ID_PATTERN.fullmatch(family_id):
+    st.error("family_id 格式錯誤：只允許英數、底線(_)與減號(-)，長度 1-64。")
+    st.stop()
 portfolio = load_portfolio_items(family_id)
 
 # ── 頁首橫幅 ─────────────────────────────────────────────────────────────────
@@ -623,9 +618,9 @@ else:
         h5.markdown('<div class="col-hdr">操作</div>', unsafe_allow_html=True)
 
         for i, stock in enumerate(portfolio):
-            row_id = str(stock.get("row_id", ""))
+            row_id = str(stock.get("row_id", "")).strip()
             symbol = str(stock.get("symbol", ""))
-            matched = portfolio_df[portfolio_df["symbol"] == symbol]
+            matched = portfolio_df[portfolio_df["row_id"] == row_id]
             item_type = matched.iloc[0]["type"] if not matched.empty else "自選股"
             name = stock_names.get(symbol, "")
             default_price = _to_float(stock.get("price"))
