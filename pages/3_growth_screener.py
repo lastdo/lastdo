@@ -252,22 +252,6 @@ def render_growth_tag_explainer(pe_max: float, rev_growth_min: float) -> None:
     st.caption("欄位對應：latest/prev 為最近兩個營收月份年增率。若僅有單月資料，該類雙月比較標記不會觸發。")
 
 
-def render_growth_result_overview(display_df: pd.DataFrame, data_month: str) -> None:
-    if display_df.empty or "警示標記" not in display_df.columns:
-        return
-
-    alerts = display_df["警示標記"].astype(str)
-    positive_count = alerts.str.contains("趨勢續強", regex=False).sum()
-    risk_count = alerts.str.contains("成長失真|獲利未跟上|估值過熱|價格領先", regex=True).sum()
-    normal_count = (alerts == "正常").sum()
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("候選檔數", f"{len(display_df)} 檔")
-    col2.metric("正向訊號", int(positive_count))
-    col3.metric("風險訊號", int(risk_count))
-    col4.metric("正常觀察", int(normal_count), help=f"最新營收月份：{data_month or '-'}")
-
-
 def render_growth_table(display_df: pd.DataFrame) -> None:
     st.dataframe(
         display_df,

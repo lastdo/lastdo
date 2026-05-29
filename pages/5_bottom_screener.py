@@ -13,7 +13,6 @@ from _finmind_api import (
     get_retry_after,
     get_status_code,
     is_rate_limited,
-    parse_eps_dataframe,
     parse_price_dataframe,
 )
 from _market_data import build_latest_revenue_view, build_price_snapshot, build_revenue_snapshot
@@ -281,23 +280,6 @@ def make_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
-def render_bottom_result_overview(display_df: pd.DataFrame, support_window_label: str) -> None:
-    alert_col = "警示標記" if "警示標記" in display_df.columns else "霅衣內璅?"
-    if display_df.empty or alert_col not in display_df.columns:
-        return
-
-    alerts = display_df[alert_col].astype(str)
-    positive_count = alerts.str.contains("貼近支撐|起漲初段", regex=True).sum()
-    risk_count = alerts.str.contains("空間縮小|營收轉弱|反彈無量", regex=True).sum()
-    normal_count = (alerts == "正常").sum()
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("候選檔數", f"{len(display_df)} 檔")
-    col2.metric("正向訊號", int(positive_count))
-    col3.metric("風險訊號", int(risk_count))
-    col4.metric("正常觀察", int(normal_count), help=f"支撐區間：{support_window_label}")
-
-
 def render_bottom_table(display_df: pd.DataFrame) -> None:
     alert_col = "警示標記" if "警示標記" in display_df.columns else "霅衣內璅?"
     code_col = "股票代碼" if "股票代碼" in display_df.columns else "?∠巨隞?Ⅳ"
@@ -401,7 +383,6 @@ def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token
 
     time.sleep(1.2)
     result = fetch_finmind_result(params, timeout=30)
-    status = result.get("status")
     msg = get_result_message(result)
     status_code = get_status_code(result)
 
@@ -420,44 +401,6 @@ def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.dropna(subset=["date", "low", "close"]).sort_values("date").reset_index(drop=True)
     return df[["date", "open", "high", "low", "close", "volume"]]
-
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def get_finmind_last_yr_eps(symbol: str, token: str = "") -> float | None:
-    """查詢去年全年EPS（最近完整4季年度加總）。rate-limit 時拋出 RuntimeError。"""
-    start_year = datetime.today().year - 3
-    params = {
-        "dataset": "TaiwanStockFinancialStatements",
-        "data_id": symbol,
-        "start_date": f"{start_year}-01-01",
-        "end_date": datetime.today().strftime("%Y-%m-%d"),
-    }
-    if token:
-        params["token"] = token
-
-    time.sleep(1.2)
-    result = fetch_finmind_result(params, timeout=20)
-    status = result.get("status")
-    msg = get_result_message(result)
-    status_code = get_status_code(result)
-
-    if is_rate_limited(result):
-        raise RuntimeError(f"FINMIND_BANNED:{get_retry_after(result)}:{msg}")
-    if status_code != 200 or not result.get("data"):
-        return None
-
-    df = parse_eps_dataframe(result)
-    if df.empty:
-        return None
-    df["year"] = df["date"].dt.year
-    cur_year = datetime.today().year
-    for yr in sorted(df["year"].unique(), reverse=True):
-        if yr >= cur_year:
-            continue
-        yr_data = df[df["year"] == yr]
-        if len(yr_data) >= 4:
-            return float(yr_data["eps"].sum())
-    return None
 
 
 def calc_bottom_support(row: pd.Series, history_df: pd.DataFrame):
@@ -495,54 +438,6 @@ def calc_bottom_support(row: pd.Series, history_df: pd.DataFrame):
         "avg_vol_20": float(history_df["vol_lot_hist"].tail(20).mean()) if history_df["vol_lot_hist"].tail(20).notna().any() else None,
         "latest_hist_vol_lot": float(latest_row["vol_lot_hist"]) if pd.notna(latest_row["vol_lot_hist"]) else None,
     }
-
-
-def build_alert_flags(result_df: pd.DataFrame, rev_growth_floor: float, rebound_ceiling: float) -> pd.DataFrame:
-    result_df = result_df.copy()
-
-    def _flags(row: pd.Series) -> str:
-        flags = []
-        rev_yoy = pd.to_numeric(row.get("rev_yoy"), errors="coerce")
-        rebound_pct = pd.to_numeric(row.get("rebound_pct"), errors="coerce")
-        latest_hist_vol_lot = pd.to_numeric(row.get("latest_hist_vol_lot"), errors="coerce")
-        avg_vol_20 = pd.to_numeric(row.get("avg_vol_20"), errors="coerce")
-
-        if pd.notna(rebound_pct) and rebound_pct <= 3:
-            flags.append("貼近支撐")
-        elif pd.notna(rebound_pct) and rebound_pct <= 8:
-            flags.append("起漲初段")
-        elif pd.notna(rebound_pct) and rebound_pct >= max(rebound_ceiling - 3, rebound_ceiling * 0.8):
-            flags.append("空間縮小")
-
-        if pd.notna(rev_yoy) and rev_yoy < max(rev_growth_floor + 5, 10):
-            flags.append("營收轉弱")
-
-        if (
-            pd.notna(rebound_pct)
-            and rebound_pct > 3
-            and pd.notna(latest_hist_vol_lot)
-            and pd.notna(avg_vol_20)
-            and latest_hist_vol_lot < avg_vol_20
-        ):
-            flags.append("反彈無量")
-
-        return "｜".join(flags) if flags else "正常"
-
-    result_df["alert_flags"] = result_df.apply(_flags, axis=1)
-    return result_df
-
-
-def render_alert_summary(display_df: pd.DataFrame) -> None:
-    if display_df.empty or "警示標記" not in display_df.columns:
-        return
-
-    flattened = "｜".join(display_df["警示標記"].astype(str).tolist())
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("貼近支撐", flattened.count("貼近支撐"))
-    col2.metric("起漲初段", flattened.count("起漲初段"))
-    col3.metric("空間縮小", flattened.count("空間縮小"))
-    col4.metric("營收轉弱", flattened.count("營收轉弱"))
-    col5.metric("反彈無量", flattened.count("反彈無量"))
 
 
 # ─────────────────────────────────────────────

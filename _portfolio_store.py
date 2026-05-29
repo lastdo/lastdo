@@ -239,27 +239,49 @@ def _sheet_records() -> list[dict[str, Any]]:
     return worksheet.get_all_records(expected_headers=WORKSHEET_HEADERS)
 
 
+def _sheet_row_values(row: dict[str, Any]) -> list[Any]:
+    normalized = normalize_portfolio_item(row)
+    return [
+        normalized["row_id"],
+        normalized["family_id"],
+        normalized["stock_id"],
+        normalized["stock_name"],
+        normalized["avg_cost"] if normalized["avg_cost"] is not None else "",
+        normalized["shares"] if normalized["shares"] is not None else "",
+        normalized["note"],
+        normalized["created_at"],
+        normalized["updated_at"],
+        "TRUE" if normalized["is_deleted"] else "FALSE",
+    ]
+
+
+def _sheet_row_to_record(row_values: list[Any]) -> dict[str, Any]:
+    cells = [str(value) for value in row_values[: len(WORKSHEET_HEADERS)]]
+    if len(cells) < len(WORKSHEET_HEADERS):
+        cells.extend([""] * (len(WORKSHEET_HEADERS) - len(cells)))
+    return {header: cells[idx] for idx, header in enumerate(WORKSHEET_HEADERS)}
+
+
+def _find_sheet_row(worksheet, row_id: str, family_id: str) -> tuple[int, dict[str, Any]] | None:
+    all_values = worksheet.get_all_values()
+    if not all_values or len(all_values) < 2:
+        return None
+
+    for row_index, row_values in enumerate(all_values[1:], start=2):
+        normalized = normalize_portfolio_item(_sheet_row_to_record(row_values))
+        if normalized["row_id"] == row_id and normalized["family_id"] == family_id:
+            return row_index, normalized
+    return None
+
+
+def _update_sheet_row(worksheet, row_index: int, row: dict[str, Any]) -> None:
+    worksheet.update(values=[_sheet_row_values(row)], range_name=f"A{row_index}:J{row_index}")
+
+
 def _write_sheet_rows(rows: list[dict[str, Any]]) -> None:
     worksheet = _get_worksheet()
-    values = [WORKSHEET_HEADERS]
     for row in rows:
-        normalized = normalize_portfolio_item(row)
-        values.append(
-            [
-                normalized["row_id"],
-                normalized["family_id"],
-                normalized["stock_id"],
-                normalized["stock_name"],
-                normalized["avg_cost"] if normalized["avg_cost"] is not None else "",
-                normalized["shares"] if normalized["shares"] is not None else "",
-                normalized["note"],
-                normalized["created_at"],
-                normalized["updated_at"],
-                "TRUE" if normalized["is_deleted"] else "FALSE",
-            ]
-        )
-    worksheet.clear()
-    worksheet.update(values=values, range_name="A1")
+        worksheet.append_row(_sheet_row_values(row), value_input_option="USER_ENTERED")
 
 
 def _migrate_local_to_sheet(default_family_id: str) -> None:
@@ -351,9 +373,8 @@ def create_portfolio_item(
 
     if get_store_status().using_google_sheets:
         _migrate_local_to_sheet(family_id)
-        rows = _sheet_records()
-        rows.append(item)
-        _write_sheet_rows(rows)
+        worksheet = _get_worksheet()
+        worksheet.append_row(_sheet_row_values(item), value_input_option="USER_ENTERED")
         return item
 
     items = _load_local_portfolio()
@@ -365,23 +386,18 @@ def create_portfolio_item(
 def update_portfolio_item(row_id: str, family_id: str, avg_cost=None, shares=None, note: str | None = None) -> None:
     if get_store_status().using_google_sheets:
         _migrate_local_to_sheet(family_id)
-        rows = _sheet_records()
-        updated_rows = []
-        matched = False
-        for row in rows:
-            normalized = normalize_portfolio_item(row)
-            if normalized["row_id"] == row_id and normalized["family_id"] == family_id:
-                normalized["avg_cost"] = _to_float(avg_cost)
-                normalized["price"] = normalized["avg_cost"]
-                normalized["shares"] = _to_int(shares)
-                if note is not None:
-                    normalized["note"] = note
-                normalized["updated_at"] = _utc_now()
-                matched = True
-            updated_rows.append(normalized)
-        if not matched:
+        worksheet = _get_worksheet()
+        found = _find_sheet_row(worksheet, row_id=row_id, family_id=family_id)
+        if not found:
             raise KeyError(f"Portfolio row not found: {row_id}")
-        _write_sheet_rows(updated_rows)
+        row_index, normalized = found
+        normalized["avg_cost"] = _to_float(avg_cost)
+        normalized["price"] = normalized["avg_cost"]
+        normalized["shares"] = _to_int(shares)
+        if note is not None:
+            normalized["note"] = note
+        normalized["updated_at"] = _utc_now()
+        _update_sheet_row(worksheet, row_index, normalized)
         return
 
     items = _load_local_portfolio()
@@ -405,19 +421,14 @@ def update_portfolio_item(row_id: str, family_id: str, avg_cost=None, shares=Non
 def delete_portfolio_item(row_id: str, family_id: str) -> None:
     if get_store_status().using_google_sheets:
         _migrate_local_to_sheet(family_id)
-        rows = _sheet_records()
-        updated_rows = []
-        matched = False
-        for row in rows:
-            normalized = normalize_portfolio_item(row)
-            if normalized["row_id"] == row_id and normalized["family_id"] == family_id:
-                normalized["is_deleted"] = True
-                normalized["updated_at"] = _utc_now()
-                matched = True
-            updated_rows.append(normalized)
-        if not matched:
+        worksheet = _get_worksheet()
+        found = _find_sheet_row(worksheet, row_id=row_id, family_id=family_id)
+        if not found:
             raise KeyError(f"Portfolio row not found: {row_id}")
-        _write_sheet_rows(updated_rows)
+        row_index, normalized = found
+        normalized["is_deleted"] = True
+        normalized["updated_at"] = _utc_now()
+        _update_sheet_row(worksheet, row_index, normalized)
         return
 
     items = _load_local_portfolio()
