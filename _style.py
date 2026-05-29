@@ -295,6 +295,39 @@ section[data-testid="stSidebar"] hr {
     border-color: #3a4b5d !important;
 }
 
+section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+section[data-testid="stSidebar"] .stButton > button {
+    background: #32465c !important;
+    border: 1px solid #52667d !important;
+    color: #f8fafc !important;
+    opacity: 1 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] button *,
+section[data-testid="stSidebar"] .stButton > button * {
+    color: #f8fafc !important;
+    opacity: 1 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] button[kind="primary"],
+section[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+    background: #2f7df6 !important;
+    border: 1px solid #8bbcff !important;
+    color: var(--text-on-header) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] button[kind="primary"] *,
+section[data-testid="stSidebar"] .stButton > button[kind="primary"] * {
+    color: var(--text-on-header) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] button:disabled,
+section[data-testid="stSidebar"] .stButton > button:disabled {
+    opacity: 1 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] button:hover,
+section[data-testid="stSidebar"] .stButton > button:hover {
+    background: #40566f !important;
+    border-color: #6f86a0 !important;
+    color: #ffffff !important;
+}
+
 #MainMenu, footer { visibility: hidden; }
 div[data-testid="stDecoration"] { display: none; }
 div[data-testid="stSidebarNav"] { display: none; }
@@ -332,7 +365,6 @@ def render_global_navigation(current_page: str) -> None:
         ("growth_screener", "📈 成長股篩選", "pages/3_growth_screener.py"),
         ("chip_screener", "🏦 外資籌碼重壓", "pages/4_chip_screener.py"),
         ("bottom_screener", "🌱 底部剛起漲", "pages/5_bottom_screener.py"),
-        ("trade_review", "AI 進出場分析", "pages/6_trade_review.py"),
     ]
 
     labels = {
@@ -342,7 +374,6 @@ def render_global_navigation(current_page: str) -> None:
         "growth_screener": "📈 成長股篩選",
         "chip_screener": "🏦 外資籌碼重壓",
         "bottom_screener": "🌱 底部剛起漲",
-        "trade_review": "AI 進出場分析",
     }
 
     st.header("功能導覽")
