@@ -2,7 +2,7 @@ import pandas as pd
 import requests
 import time
 
-from _app_common import FINMIND_URL
+from data_layer.app_common import FINMIND_URL
 
 
 def fetch_finmind_result(params: dict, timeout: int = 20) -> dict:

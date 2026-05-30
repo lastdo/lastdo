@@ -5,15 +5,15 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from _app_common import get_runtime_secret
-from _finmind_api import (
+from data_layer.app_common import get_runtime_secret
+from data_layer.finmind_api import (
     fetch_finmind_price_frame,
     fetch_finmind_result,
     parse_price_dataframe,
     get_status_code,
 )
-from _export_utils import dataframe_to_csv_bytes
-from _market_data import (
+from data_layer.export_utils import dataframe_to_csv_bytes
+from data_layer.market_data import (
     REVENUE_COLUMNS,
     build_price_snapshot,
     build_recent_revenue_metrics,
@@ -21,9 +21,9 @@ from _market_data import (
     latest_revenue_month,
     prev_roc_month,
 )
-from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
-from _portfolio_store import create_portfolio_item, get_default_family_id, load_portfolio
-from _public_valuation import attach_public_valuation, fetch_public_pe_ratios
+from data_layer.market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
+from data_layer.portfolio_store import create_portfolio_item, get_default_family_id, load_portfolio
+from data_layer.public_valuation import attach_public_valuation, fetch_public_pe_ratios
 
 load_dotenv()
 
@@ -43,7 +43,7 @@ RESULT_VIEW_OPTIONS = ["標記說明", "明細表", "診斷與資料"]
 # ------------------------------
 st.set_page_config(page_title="成長股篩選", page_icon="📈", layout="wide")
 
-from _style import apply_style, page_header, render_global_navigation
+from render_layer.style import apply_style, page_header, render_global_navigation
 apply_style()
 page_header("📈", "成長股篩選", "從營收成長、成交量、股價與官方本益比找出合理估值的成長股。")
 
