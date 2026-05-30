@@ -5,7 +5,7 @@ import re
 import pandas as pd
 import plotly.express as px
 
-from _app_common import configure_runtime
+from _app_common import configure_runtime, ensure_analysis_dir
 from _market_api import fetch_json_tpex, fetch_json_twse
 from _portfolio_store import (
     create_portfolio_item,
@@ -26,6 +26,7 @@ STOCK_SELL_TAX_RATE = 0.003
 URL_TWSE_PRICE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 FAMILY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+ANALYSIS_DIR = ensure_analysis_dir()
 
 
 def _parse_market_number(value):
@@ -79,6 +80,7 @@ def fetch_market_snapshot() -> tuple[dict, list[str]]:
                         "stock_name": str(row.get("Name", "")).strip(),
                         "latest_price": close_price,
                         "previous_price": previous_price,
+                        "vol_lot": (_parse_market_number(row.get("TradeVolume")) or 0) / 1000,
                         "price_date": twse_date,
                     }
     except Exception as exc:
@@ -103,6 +105,7 @@ def fetch_market_snapshot() -> tuple[dict, list[str]]:
                         "stock_name": str(row.get("CompanyName", "")).strip(),
                         "latest_price": close_price,
                         "previous_price": previous_price,
+                        "vol_lot": (_parse_market_number(row.get("TradingShares")) or 0) / 1000,
                         "price_date": tpex_date,
                     }
     except Exception as exc:
@@ -308,6 +311,7 @@ def build_portfolio_rows(portfolio: list, stock_names: dict, market_snapshot: di
             "shares": shares,
             "latest_price": latest_price,
             "previous_price": previous_price,
+            "vol_lot": price_info.get("vol_lot"),
             "price_date": price_info.get("price_date", ""),
             "invested_cost": invested_cost,
             "market_value": market_value,
@@ -318,6 +322,11 @@ def build_portfolio_rows(portfolio: list, stock_names: dict, market_snapshot: di
             "unrealized_pnl": unrealized_pnl,
             "unrealized_return": unrealized_return,
             "today_pnl": today_pnl,
+            "today_return": (
+                (latest_price - previous_price) / previous_price * 100
+                if latest_price is not None and previous_price not in (None, 0)
+                else None
+            ),
         })
 
     df = pd.DataFrame(rows)
@@ -365,6 +374,34 @@ def filter_inventory_view(
     return filtered
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def load_analysis_index() -> dict[str, dict]:
+    index: dict[str, dict] = {}
+    if not ANALYSIS_DIR.exists():
+        return index
+
+    for path in ANALYSIS_DIR.glob("*"):
+        if path.suffix.lower() not in {".csv", ".md"}:
+            continue
+        match = re.match(r"^(\d{4,6})_", path.name)
+        if not match:
+            continue
+        stock_id = match.group(1)
+        entry = index.setdefault(
+            stock_id,
+            {"count": 0, "latest_at": "", "has_csv": False, "has_md": False},
+        )
+        entry["count"] += 1
+        latest_at = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d")
+        if latest_at > entry["latest_at"]:
+            entry["latest_at"] = latest_at
+        if path.suffix.lower() == ".csv":
+            entry["has_csv"] = True
+        elif path.suffix.lower() == ".md":
+            entry["has_md"] = True
+    return index
+
+
 if st.session_state.pop("refresh_market_snapshot", False):
     fetch_market_snapshot.clear()
 
@@ -373,6 +410,7 @@ stock_names = {
     stock_id: info.get("stock_name", "")
     for stock_id, info in market_snapshot.items()
 }
+analysis_index = load_analysis_index()
 store_status = get_store_status()
 known_family_ids = list_family_ids()
 store_label = "Google Sheets" if store_status.using_google_sheets else "Local JSON"
@@ -635,6 +673,13 @@ with filter_col4:
         ["持倉比例", "目前市值", "未實現損益", "今日損益", "未實現報酬率"],
         key="inventory_chart_metric",
     )
+view_col1, view_col2 = st.columns([1.3, 2.7])
+with view_col1:
+    holding_view_mode = st.selectbox(
+        "持股表檢視",
+        ["精簡檢視", "完整檢視"],
+        key="inventory_holding_view_mode",
+    )
 
 filtered_holding_df = filter_inventory_view(holding_df, search_text, scope_mode, quick_filter, "持股")
 filtered_watch_df = filter_inventory_view(watch_df, search_text, scope_mode, quick_filter, "自選股")
@@ -747,7 +792,19 @@ else:
         display_holding_df["今日損益"] = display_holding_df["today_pnl"]
         display_holding_df["持倉比例"] = display_holding_df["position_ratio"]
         display_holding_df["價格日"] = display_holding_df["price_date"].replace("", "—")
-        display_columns = [
+        compact_columns = [
+            "股票",
+            "持有成本",
+            "股數",
+            "最新價",
+            "目前市值",
+            "未實現損益",
+            "未實現報酬率",
+            "今日損益",
+            "持倉比例",
+            "價格日",
+        ]
+        full_columns = [
             "股票",
             "持有成本",
             "股數",
@@ -763,6 +820,7 @@ else:
             "持倉比例",
             "價格日",
         ]
+        display_columns = compact_columns if holding_view_mode == "精簡檢視" else full_columns
         styled_holding_df = display_holding_df[display_columns].style.format({
             "持有成本": lambda x: format_money(x, 2),
             "股數": lambda x: f"{int(x):,} 股" if pd.notna(x) else "—",
@@ -777,22 +835,18 @@ else:
             "今日損益": format_signed_money,
             "持倉比例": lambda x: f"{x:.2f}%" if pd.notna(x) else "—",
         })
-        styled_holding_df = styled_holding_df.apply(
-            lambda col: [pnl_color_style(v) for v in display_holding_df["gross_unrealized_pnl"]],
-            subset=["毛損益"],
-        )
-        styled_holding_df = styled_holding_df.apply(
-            lambda col: [pnl_color_style(v) for v in display_holding_df["unrealized_pnl"]],
-            subset=["未實現損益"],
-        )
-        styled_holding_df = styled_holding_df.apply(
-            lambda col: [pnl_color_style(v) for v in display_holding_df["unrealized_return"]],
-            subset=["未實現報酬率"],
-        )
-        styled_holding_df = styled_holding_df.apply(
-            lambda col: [pnl_color_style(v) for v in display_holding_df["today_pnl"]],
-            subset=["今日損益"],
-        )
+        style_targets = [
+            ("毛損益", "gross_unrealized_pnl"),
+            ("未實現損益", "unrealized_pnl"),
+            ("未實現報酬率", "unrealized_return"),
+            ("今日損益", "today_pnl"),
+        ]
+        for display_col, source_col in style_targets:
+            if display_col in display_columns:
+                styled_holding_df = styled_holding_df.apply(
+                    lambda col, source_col=source_col: [pnl_color_style(v) for v in display_holding_df[source_col]],
+                    subset=[display_col],
+                )
         st.dataframe(
             styled_holding_df,
             use_container_width=True,
@@ -813,15 +867,33 @@ else:
         st.info("目前篩選條件下沒有符合的自選股。")
     else:
         watch_display = filtered_watch_df.copy()
-        watch_display["股票"] = watch_display["symbol"] + " " + watch_display["name"].fillna("")
-        watch_display["最新價"] = watch_display["latest_price"].map(lambda x: format_money(x, 2))
-        watch_display["前收"] = watch_display["previous_price"].map(lambda x: format_money(x, 2))
-        watch_display["價格日"] = watch_display["price_date"].replace("", "—")
-        st.dataframe(
-            watch_display[["股票", "最新價", "前收", "價格日"]],
-            use_container_width=True,
-            hide_index=True,
+        watch_display["analysis_count"] = watch_display["symbol"].map(
+            lambda symbol: analysis_index.get(str(symbol), {}).get("count", 0)
         )
+        watch_display["analysis_latest_at"] = watch_display["symbol"].map(
+            lambda symbol: analysis_index.get(str(symbol), {}).get("latest_at", "")
+        )
+        watch_display["股票"] = watch_display["symbol"] + " " + watch_display["name"].fillna("")
+        watch_display["最新價"] = watch_display["latest_price"]
+        watch_display["前收"] = watch_display["previous_price"]
+        watch_display["漲跌幅"] = watch_display["today_return"]
+        watch_display["成交量(張)"] = watch_display["vol_lot"]
+        watch_display["分析記錄"] = watch_display["analysis_count"].map(lambda x: f"{int(x)} 筆" if x else "—")
+        watch_display["最近分析"] = watch_display["analysis_latest_at"].replace("", "—")
+        watch_display["價格日"] = watch_display["price_date"].replace("", "—")
+        watch_view = watch_display[
+            ["股票", "最新價", "前收", "漲跌幅", "成交量(張)", "分析記錄", "最近分析", "價格日"]
+        ].style.format({
+            "最新價": lambda x: format_money(x, 2),
+            "前收": lambda x: format_money(x, 2),
+            "漲跌幅": format_pct,
+            "成交量(張)": lambda x: f"{x:,.0f}" if pd.notna(x) else "—",
+        })
+        watch_view = watch_view.apply(
+            lambda col: [pnl_color_style(v) for v in watch_display["today_return"]],
+            subset=["漲跌幅"],
+        )
+        st.dataframe(watch_view, use_container_width=True, hide_index=True)
 
     with st.expander("管理持股 / 自選股", expanded=False):
         st.markdown('<div class="form-section-title">操作</div>', unsafe_allow_html=True)
