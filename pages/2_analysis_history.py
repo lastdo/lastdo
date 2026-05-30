@@ -5,7 +5,14 @@ import streamlit as st
 
 from _app_common import ensure_analysis_dir
 from _export_utils import CSV_ENCODING
-from _style import apply_style, page_header, render_global_navigation
+from _style import (
+    apply_style,
+    page_header,
+    render_empty_state,
+    render_global_navigation,
+    render_list_header,
+    render_meta_strip,
+)
 
 
 st.set_page_config(
@@ -59,6 +66,12 @@ all_files = sorted(
     key=lambda f: f.stat().st_mtime,
     reverse=True,
 )
+latest_record_time = (
+    datetime.fromtimestamp(all_files[0].stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+    if all_files
+    else "—"
+)
+total_size_kb = sum(file.stat().st_size for file in all_files) / 1024
 
 if file_type == "只看技術面 CSV":
     filtered = [f for f in all_files if f.suffix == ".csv"]
@@ -71,15 +84,48 @@ if keywords.strip():
     keyword = keywords.strip().lower()
     filtered = [f for f in filtered if keyword in f.name.lower()]
 
-st.subheader(f"共 {len(filtered)} 筆記錄")
+render_meta_strip(
+    [
+        {
+            "label": "全部記錄",
+            "value": f"{len(all_files)} 筆",
+            "sub": f"CSV {len(csv_files)} 筆 / AI 報告 {len(md_files)} 筆",
+        },
+        {
+            "label": "目前篩選",
+            "value": f"{len(filtered)} 筆",
+            "sub": file_type,
+        },
+        {
+            "label": "最近更新",
+            "value": latest_record_time,
+            "sub": "依檔案修改時間排序",
+        },
+        {
+            "label": "總容量",
+            "value": f"{total_size_kb:.1f} KB",
+            "sub": "analysis 目錄內 CSV / MD",
+        },
+    ]
+)
 
 if not all_files:
-    st.info("尚無分析記錄。請至「AI 台股趨勢分析系統」按下「儲存到分析記錄」按鈕。")
+    render_empty_state(
+        "📂",
+        "尚無分析記錄",
+        "請至「AI 台股趨勢分析系統」按下「儲存到分析記錄」按鈕。",
+    )
     st.stop()
 
 if not filtered:
-    st.info("沒有符合目前篩選條件的分析記錄。")
+    render_empty_state(
+        "🔎",
+        "沒有符合條件的記錄",
+        "請調整檔案類型或股票代碼 / 名稱搜尋條件。",
+    )
     st.stop()
+
+render_list_header("分析記錄清單", f"{len(filtered)} 筆")
 
 for file in filtered:
     mtime = datetime.fromtimestamp(file.stat().st_mtime).strftime("%Y-%m-%d %H:%M")

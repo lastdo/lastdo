@@ -1,4 +1,6 @@
 """Shared visual styling and sidebar navigation helpers."""
+import html
+
 import streamlit as st
 
 
@@ -514,6 +516,88 @@ def page_header(icon: str, title: str, subtitle: str = ""):
         <h1>{title}</h1>
         <p>{subtitle}</p>
     </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def _escape(value) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def render_section_title(title: str) -> None:
+    """Render the shared section title used above tables and controls."""
+    st.markdown(
+        f"""<div class="form-section-title">{_escape(title)}</div>""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_list_header(title: str, count_text: str = "") -> None:
+    """Render a shared dark list/table header with an optional count badge."""
+    badge_html = (
+        f"""<span class="lh-count">{_escape(count_text)}</span>"""
+        if count_text
+        else ""
+    )
+    st.markdown(
+        f"""
+<div class="list-header">
+<span>{_escape(title)}</span>
+{badge_html}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_empty_state(icon: str, title: str, body: str) -> None:
+    """Render a shared empty-state block."""
+    st.markdown(
+        f"""
+<div class="empty-state">
+<div class="es-icon">{_escape(icon)}</div>
+<h3>{_escape(title)}</h3>
+<p>{_escape(body)}</p>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_panel(title: str, body_html: str) -> None:
+    """Render a compact helper panel. body_html may contain simple inline HTML."""
+    st.markdown(
+        f"""
+<div class="panel-card">
+<div class="panel-title">{_escape(title)}</div>
+<div class="panel-body">{body_html}</div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_meta_strip(items: list[dict]) -> None:
+    """Render the shared top-of-page metadata strip."""
+    chips = []
+    for item in items:
+        label = _escape(item.get("label", ""))
+        value = _escape(item.get("value", ""))
+        sub = _escape(item.get("sub", ""))
+        value_class = _escape(item.get("value_class", ""))
+        chips.append(
+            f"""<div class="meta-chip">
+<div class="meta-chip-label">{label}</div>
+<div class="meta-chip-value {value_class}">{value}</div>
+<div class="meta-chip-sub">{sub}</div>
+</div>"""
+        )
+    st.markdown(
+        f"""
+<div class="meta-strip">
+{''.join(chips)}
 </div>
 """,
         unsafe_allow_html=True,

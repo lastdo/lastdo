@@ -17,7 +17,15 @@ from _portfolio_store import (
     load_portfolio as load_portfolio_items,
     update_portfolio_item as update_portfolio_record,
 )
-from _style import apply_style, render_global_navigation
+from _style import (
+    apply_style,
+    render_empty_state,
+    render_global_navigation,
+    render_list_header,
+    render_meta_strip,
+    render_panel,
+    render_section_title,
+)
 
 configure_runtime()
 
@@ -547,32 +555,30 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-st.markdown(
-    f"""
-<div class="meta-strip">
-    <div class="meta-chip">
-        <div class="meta-chip-label">目前家戶</div>
-        <div class="meta-chip-value">{family_id}</div>
-        <div class="meta-chip-sub">目前正在查看的 family_id</div>
-    </div>
-    <div class="meta-chip">
-        <div class="meta-chip-label">持股來源</div>
-        <div class="meta-chip-value">{store_label}</div>
-        <div class="meta-chip-sub">目前資料後端</div>
-    </div>
-    <div class="meta-chip">
-        <div class="meta-chip-label">行情覆蓋率</div>
-        <div class="meta-chip-value {coverage_class}">{priced_holding_count}/{holding_count}</div>
-        <div class="meta-chip-sub">約 {price_coverage_pct:.0f}% 持股已取得最新價</div>
-    </div>
-    <div class="meta-chip">
-        <div class="meta-chip-label">最新價格日</div>
-        <div class="meta-chip-value">{latest_price_date}</div>
-        <div class="meta-chip-sub">庫存頁目前使用的價格日期</div>
-    </div>
-</div>
-""",
-    unsafe_allow_html=True,
+render_meta_strip(
+    [
+        {
+            "label": "目前家戶",
+            "value": family_id,
+            "sub": "目前正在查看的 family_id",
+        },
+        {
+            "label": "持股來源",
+            "value": store_label,
+            "sub": "目前資料後端",
+        },
+        {
+            "label": "行情覆蓋率",
+            "value": f"{priced_holding_count}/{holding_count}",
+            "sub": f"約 {price_coverage_pct:.0f}% 持股已取得最新價",
+            "value_class": coverage_class,
+        },
+        {
+            "label": "最新價格日",
+            "value": latest_price_date,
+            "sub": "庫存頁目前使用的價格日期",
+        },
+    ]
 )
 
 summary_cards = [
@@ -595,7 +601,7 @@ for row in [summary_cards[:3], summary_cards[3:]]:
             </div>""", unsafe_allow_html=True)
 
 # ── 新增持股表單 ───────────────────────────────────────────────────────────────
-st.markdown('<div class="form-section-title">新增自選股 / 持股</div>', unsafe_allow_html=True)
+render_section_title("新增自選股 / 持股")
 
 form_col, hint_col = st.columns([2.3, 1.2])
 with form_col:
@@ -611,18 +617,13 @@ with form_col:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             submitted = st.form_submit_button("＋ 新增", use_container_width=True, type="primary")
 with hint_col:
-    st.markdown(
+    render_panel(
+        "輸入小提示",
         """
-<div class="panel-card">
-    <div class="panel-title">輸入小提示</div>
-    <div class="panel-body">
         只填股票代碼：加入自選股。<br>
         再填成本與股數：直接視為持股。<br>
         如果剛切換 family_id，建議先按一次「重新抓取行情」。
-    </div>
-</div>
 """,
-        unsafe_allow_html=True,
     )
 
 if submitted:
@@ -654,7 +655,7 @@ if submitted:
         st.rerun()
 
 # ── 快速篩選 ──────────────────────────────────────────────────────────────────
-st.markdown('<div class="form-section-title">快速篩選</div>', unsafe_allow_html=True)
+render_section_title("快速篩選")
 st.markdown('<div class="filter-toolbar-title">快速定位想看的持股與圖表視角</div>', unsafe_allow_html=True)
 filter_col1, filter_col2, filter_col3, filter_col4 = st.columns([2.2, 1.2, 1.4, 1.4])
 with filter_col1:
@@ -688,7 +689,7 @@ filtered_watch_df = filter_inventory_view(watch_df, search_text, scope_mode, qui
 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
 if not filtered_holding_df.empty and filtered_holding_df["market_value"].notna().any():
-    st.markdown('<div class="form-section-title">個股圖表</div>', unsafe_allow_html=True)
+    render_section_title("個股圖表")
     st.caption(f"目前圖表指標：{chart_metric}")
     chart_specs = {
         "持倉比例": {
@@ -756,19 +757,14 @@ if not filtered_holding_df.empty and filtered_holding_df["market_value"].notna()
 
 # ── 自選股 / 持股清單 ─────────────────────────────────────────────────────────
 if not portfolio:
-    st.markdown("""
-    <div class="empty-state">
-        <div class="es-icon">📭</div>
-        <h3>庫存清單是空的</h3>
-        <p>在上方輸入股票代碼，按「新增」開始建立自選股或持股清單</p>
-    </div>""", unsafe_allow_html=True)
+    render_empty_state(
+        "📭",
+        "庫存清單是空的",
+        "在上方輸入股票代碼，按「新增」開始建立自選股或持股清單",
+    )
 else:
-    st.markdown('<div class="form-section-title">持股清單</div>', unsafe_allow_html=True)
-    st.markdown(f"""
-    <div class="list-header">
-        <span>持股清單</span>
-        <span class="lh-count">{len(filtered_holding_df)} / {len(holding_df)} 檔</span>
-    </div>""", unsafe_allow_html=True)
+    render_section_title("持股清單")
+    render_list_header("持股清單", f"{len(filtered_holding_df)} / {len(holding_df)} 檔")
     st.caption("依目前市值由高到低排序，方便先看資金集中度最高的部位。")
 
     if holding_df.empty:
@@ -853,12 +849,8 @@ else:
             hide_index=True,
         )
 
-    st.markdown('<div class="form-section-title">自選股清單</div>', unsafe_allow_html=True)
-    st.markdown(f"""
-    <div class="list-header">
-        <span>自選股清單</span>
-        <span class="lh-count">{len(filtered_watch_df)} / {len(watch_df)} 檔</span>
-    </div>""", unsafe_allow_html=True)
+    render_section_title("自選股清單")
+    render_list_header("自選股清單", f"{len(filtered_watch_df)} / {len(watch_df)} 檔")
     st.caption("這裡保留尚未填入成本與股數的觀察名單，方便之後轉成正式持股。")
 
     if watch_df.empty:
@@ -896,7 +888,7 @@ else:
         st.dataframe(watch_view, use_container_width=True, hide_index=True)
 
     with st.expander("管理持股 / 自選股", expanded=False):
-        st.markdown('<div class="form-section-title">操作</div>', unsafe_allow_html=True)
+        render_section_title("操作")
         h0, h1, h2, h3, h4, h5 = st.columns([0.4, 1.1, 1.7, 1.0, 2.5, 2.7])
         h0.markdown('<div class="col-hdr">#</div>', unsafe_allow_html=True)
         h1.markdown('<div class="col-hdr">代碼</div>', unsafe_allow_html=True)
