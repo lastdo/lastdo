@@ -6,6 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from _finmind_api import fetch_finmind_price_frame
 from _institutional_flow import (
     fetch_tpex_3insti as fetch_tpex_3insti_shared,
     fetch_twse_3insti as fetch_twse_3insti_shared,
@@ -14,7 +15,7 @@ from _market_data import build_price_snapshot
 from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
 from _portfolio_store import create_portfolio_item, get_default_family_id, load_portfolio
 from _public_valuation import attach_public_valuation, fetch_public_pe_ratios
-from _app_common import FINMIND_URL, get_runtime_secret
+from _app_common import get_runtime_secret
 
 load_dotenv()
 
@@ -26,7 +27,6 @@ FAMILY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 # ─────────────────────────────────────────────
 URL_TWSE_PRICE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
-from _app_common import FINMIND_URL
 from _export_utils import dataframe_to_csv_bytes
 from _page_bootstrap import ROOT_DIR
 
@@ -312,24 +312,18 @@ def render_result_view_selector(key: str, default: str = "標記說明") -> str:
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_finmind_price_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
     start_date = (datetime.today() - timedelta(days=220)).strftime("%Y-%m-%d")
-    params = {
-        "dataset": "TaiwanStockPrice",
-        "data_id": symbol,
-        "start_date": start_date,
-        "end_date": datetime.today().strftime("%Y-%m-%d"),
-    }
-    if token:
-        params["token"] = token
-
     try:
-        result = requests.get(FINMIND_URL, params=params, timeout=20).json()
-        if int(result.get("status", 0) or 0) != 200 or not result.get("data"):
+        df, status_code, _msg, _retry_after = fetch_finmind_price_frame(
+            symbol,
+            start_date,
+            datetime.today().strftime("%Y-%m-%d"),
+            token=token,
+            timeout=20,
+            sleep_seconds=0,
+            raise_on_rate_limit=False,
+        )
+        if status_code != 200 or df.empty or "close" not in df.columns:
             return pd.DataFrame()
-        df = pd.DataFrame(result["data"])
-        if df.empty or "date" not in df.columns or "close" not in df.columns:
-            return pd.DataFrame()
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df["close"] = pd.to_numeric(df["close"], errors="coerce")
         df = df.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
         if df.empty:
             return pd.DataFrame()
@@ -381,6 +375,7 @@ def render_watchlist_adder(result_df: pd.DataFrame, family_id: str, finmind_toke
 
     selected_symbol = str(selected["stock_id"]).strip()
     already_exists = selected_symbol in existing_symbols
+    selected_close = pd.to_numeric(selected.get("close"), errors="coerce")
     chart_df = get_finmind_price_chart_data(selected_symbol, finmind_token)
 
     st.markdown("#### 技術線型")
@@ -396,10 +391,10 @@ def render_watchlist_adder(result_df: pd.DataFrame, family_id: str, finmind_toke
         fig.update_yaxes(showgrid=True, gridcolor="#e5edf7", title=None)
         st.plotly_chart(fig, use_container_width=True)
 
-    latest_ma60 = chart_df["ma60"].iloc[-1] if not chart_df.empty else None
-    premium = ((selected["close"] / latest_ma60) - 1) * 100 if pd.notna(selected.get("close")) and pd.notna(latest_ma60) and latest_ma60 else None
+    latest_ma60 = pd.to_numeric(chart_df["ma60"].iloc[-1], errors="coerce") if not chart_df.empty else None
+    premium = ((selected_close / latest_ma60) - 1) * 100 if pd.notna(selected_close) and pd.notna(latest_ma60) and latest_ma60 else None
     st.caption(
-        f"目前收盤 {_fmt_number(pd.to_numeric(selected.get('close'), errors='coerce'))}｜"
+        f"目前收盤 {_fmt_number(selected_close)}｜"
         f"MA60 {_fmt_number(latest_ma60)}｜"
         f"季線溢價 {_fmt_number(premium, '%')}"
     )
@@ -651,34 +646,43 @@ _df_inst_sum["foreign_net_buy_lot"] = _df_inst_sum["foreign_net_shares"] / 1000 
 _df_inst_all["trade_date"] = pd.to_datetime(_df_inst_all["trade_date"])
 _df_inst_all["foreign_net_buy_lot"] = pd.to_numeric(_df_inst_all["foreign_net_shares"], errors="coerce").fillna(0) / 1000
 _chip_window = max(int(days_n), 1)
+_df_chip_metrics_source = _df_inst_all.sort_values(
+    ["stock_id", "trade_date"],
+    ascending=[True, False],
+).reset_index(drop=True)
+_df_chip_metrics_source["_row_no"] = _df_chip_metrics_source.groupby("stock_id").cumcount()
+_df_chip_metrics_source["_non_positive_row"] = _df_chip_metrics_source["_row_no"].where(
+    _df_chip_metrics_source["foreign_net_buy_lot"] <= 0
+)
 
+_group_size = _df_chip_metrics_source.groupby("stock_id").size().rename("_group_size")
+_first_non_positive = _df_chip_metrics_source.groupby("stock_id")["_non_positive_row"].min()
+_recent_window = (
+    _df_chip_metrics_source[_df_chip_metrics_source["_row_no"] < _chip_window]
+    .groupby("stock_id")["foreign_net_buy_lot"]
+    .sum()
+    .rename("foreign_buy_window_lot")
+)
+_prev_window = (
+    _df_chip_metrics_source[
+        (_df_chip_metrics_source["_row_no"] >= _chip_window)
+        & (_df_chip_metrics_source["_row_no"] < _chip_window * 2)
+    ]
+    .groupby("stock_id")["foreign_net_buy_lot"]
+    .sum()
+    .rename("foreign_buy_prev_window_lot")
+)
+_latest1 = _df_chip_metrics_source.groupby("stock_id")["foreign_net_buy_lot"].first().rename("foreign_buy_latest_lot")
 
-def _chip_metrics(group: pd.DataFrame) -> pd.Series:
-    group = group.sort_values("trade_date", ascending=False).reset_index(drop=True)
-    values = group["foreign_net_buy_lot"].tolist()
-
-    streak = 0
-    for value in values:
-        if value > 0:
-            streak += 1
-        else:
-            break
-
-    recent_window = sum(values[:_chip_window]) if values else 0
-    prev_window = sum(values[_chip_window : _chip_window * 2]) if len(values) > _chip_window else 0
-    latest1 = values[0] if values else 0
-
-    return pd.Series({
-        "foreign_buy_streak": streak,
-        "foreign_buy_window_lot": recent_window,
-        "foreign_buy_prev_window_lot": prev_window,
-        "foreign_buy_3d_lot": recent_window,
-        "foreign_buy_prev3d_lot": prev_window,
-        "foreign_buy_latest_lot": latest1,
-    })
-
-
-_df_chip_metrics = _df_inst_all.groupby("stock_id").apply(_chip_metrics).reset_index()
+_df_chip_metrics = pd.DataFrame({"stock_id": _group_size.index.astype(str)})
+_df_chip_metrics["foreign_buy_streak"] = (
+    _first_non_positive.reindex(_group_size.index).fillna(_group_size).astype(int).to_numpy()
+)
+_df_chip_metrics["foreign_buy_window_lot"] = _recent_window.reindex(_group_size.index, fill_value=0).to_numpy()
+_df_chip_metrics["foreign_buy_prev_window_lot"] = _prev_window.reindex(_group_size.index, fill_value=0).to_numpy()
+_df_chip_metrics["foreign_buy_3d_lot"] = _df_chip_metrics["foreign_buy_window_lot"]
+_df_chip_metrics["foreign_buy_prev3d_lot"] = _df_chip_metrics["foreign_buy_prev_window_lot"]
+_df_chip_metrics["foreign_buy_latest_lot"] = _latest1.reindex(_group_size.index, fill_value=0).to_numpy()
 
 _inst_date0 = _valid_dates[-1].strftime("%Y-%m-%d") if _valid_dates else "-"
 _inst_date1 = _valid_dates[0].strftime("%Y-%m-%d")  if _valid_dates else "-"

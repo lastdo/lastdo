@@ -7,8 +7,9 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from _app_common import FINMIND_URL, get_runtime_secret
+from _app_common import get_runtime_secret
 from _finmind_api import (
+    fetch_finmind_price_frame,
     fetch_finmind_result,
     parse_eps_dataframe,
     parse_price_dataframe,
@@ -151,6 +152,8 @@ def build_growth_alert_flags(result_df: pd.DataFrame, pe_limit: float, rev_floor
         pe_ratio = pd.to_numeric(row.get("pe_ratio"), errors="coerce")
         season_line_premium = pd.to_numeric(row.get("season_line_premium"), errors="coerce")
 
+        extreme_growth_threshold = max(rev_floor * 4, 200)
+
         if (
             pd.notna(avg_rev_yoy)
             and pd.notna(latest_rev_yoy)
@@ -161,6 +164,18 @@ def build_growth_alert_flags(result_df: pd.DataFrame, pe_limit: float, rev_floor
             and abs(latest_rev_yoy - prev_rev_yoy) <= 20
         ):
             flags.append("趨勢續強")
+
+        if (
+            pd.notna(avg_rev_yoy)
+            and avg_rev_yoy >= extreme_growth_threshold
+        ) or (
+            pd.notna(latest_rev_yoy)
+            and latest_rev_yoy >= extreme_growth_threshold
+        ) or (
+            pd.notna(prev_rev_yoy)
+            and prev_rev_yoy >= extreme_growth_threshold
+        ):
+            flags.append("基期效應")
 
         if (
             pd.notna(latest_rev_yoy)
@@ -194,7 +209,7 @@ def build_growth_alert_flags(result_df: pd.DataFrame, pe_limit: float, rev_floor
         ):
             flags.append("價格領先")
 
-        return "｜".join(flags) if flags else "正常"
+        return "｜".join(flags) if flags else "未觸發警示"
 
     result_df["alert_flags"] = result_df.apply(_flags, axis=1)
     return result_df
@@ -234,12 +249,19 @@ def render_growth_alert_summary(display_df: pd.DataFrame) -> None:
         return
 
     flattened = "｜".join(display_df["警示標記"].astype(str).tolist())
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col0, col1, col2, col3, col4, col5 = st.columns(6)
+    col0.metric("基期效應", flattened.count("基期效應"))
+    col0.caption("avg/latest/prev >= max(門檻×4, 200)")
     col1.metric("趨勢續強", flattened.count("趨勢續強"))
+    col1.caption("近2月高成長，且雙月落差 <= 20")
     col2.metric("成長失真", flattened.count("成長失真"))
+    col2.caption("|latest - prev| >= 35")
     col3.metric("獲利未跟上", flattened.count("獲利未跟上"))
+    col3.caption("高成長，但 PE >= max(上限×0.75, 18)")
     col4.metric("估值過熱", flattened.count("估值過熱"))
+    col4.caption("PE >= max(上限×0.9, 18) 且 PE > 營收年增×0.8")
     col5.metric("價格領先", flattened.count("價格領先"))
+    col5.caption("季線溢價 >= 8%，且 latest <= prev + 5")
 
 
 def render_growth_tag_explainer(pe_max: float, rev_growth_min: float) -> None:
@@ -254,12 +276,13 @@ def render_growth_tag_explainer(pe_max: float, rev_growth_min: float) -> None:
 
 | 標記 | 觸發條件（對應程式） |
 |---|---|
+| 基期效應 | `avg/latest/prev_rev_yoy >= max(門檻×4, 200)` |
 | 趨勢續強 | `avg_rev_yoy >= max(門檻+10, 30)` 且 `latest_rev_yoy > 0` 且 `prev_rev_yoy > 0` 且 `|latest-prev| <= 20` |
 | 成長失真 | `|latest_rev_yoy - prev_rev_yoy| >= 35` |
 | 獲利未跟上 | `avg_rev_yoy >= max(門檻, 20)` 且 `pe_ratio >= max(PE上限×0.75, 18)` |
 | 估值過熱 | `pe_ratio >= max(PE上限×0.9, 18)` 且 `pe_ratio > avg_rev_yoy × 0.8` |
 | 價格領先 | `season_line_premium >= 8%` 且 `latest_rev_yoy <= prev_rev_yoy + 5` |
-| 正常 | 以上標記皆未觸發 |
+| 未觸發警示 | 以上標記皆未觸發 |
 """
     )
     st.caption("欄位對應：latest/prev 為最近兩個營收月份年增率。若僅有單月資料，該類雙月比較標記不會觸發。")
@@ -517,27 +540,20 @@ def fetch_json_tpex(url: str) -> list:
 def get_finmind_ma60(symbol: str, token: str = "") -> tuple[float | None, int | None, str]:
     """取得個股最新 60 日均線（季線）與查詢狀態。"""
     start_date = (datetime.today() - timedelta(days=140)).strftime("%Y-%m-%d")
-    params = {
-        "dataset": "TaiwanStockPrice",
-        "data_id": symbol,
-        "start_date": start_date,
-        "end_date": datetime.today().strftime("%Y-%m-%d"),
-    }
-    if token:
-        params["token"] = token
     try:
-        time.sleep(1.2)
-        result = fetch_finmind_result(params, timeout=20)
-        status = result.get("status")
-        msg = get_result_message(result)
-        status_code = get_status_code(result)
-        if status_code != 200 or not result.get("data"):
+        df, status_code, msg, _retry_after = fetch_finmind_price_frame(
+            symbol,
+            start_date,
+            datetime.today().strftime("%Y-%m-%d"),
+            token=token,
+            timeout=20,
+            sleep_seconds=1.2,
+            raise_on_rate_limit=False,
+        )
+        if status_code != 200 or df.empty:
             return None, status_code, msg
-        df = parse_price_dataframe(result)
-        if df.empty or "close" not in df.columns:
+        if "close" not in df.columns:
             return None, status_code, msg
-        df = df.sort_values("date").reset_index(drop=True)
-        df["close"] = pd.to_numeric(df["close"], errors="coerce")
         ma = df["close"].rolling(60, min_periods=60).mean().iloc[-1]
         if pd.isna(ma):
             return None, status_code, msg

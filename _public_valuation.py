@@ -1,4 +1,5 @@
 import pandas as pd
+import streamlit as st
 
 from _market_data import build_public_pe_snapshot
 from _market_api import fetch_json_tpex, fetch_json_twse
@@ -9,6 +10,7 @@ URL_TPEX_PE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysi
 PUBLIC_PE_LABEL = "官方上市櫃API（近四季EPS反推）"
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
 def fetch_public_pe_ratios() -> pd.DataFrame:
     """Fetch official TWSE/TPEX PE ratios and normalize to a single schema."""
     try:
