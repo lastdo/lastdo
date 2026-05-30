@@ -333,6 +333,38 @@ def build_portfolio_rows(portfolio: list, stock_names: dict, market_snapshot: di
     return df
 
 
+def filter_inventory_view(
+    df: pd.DataFrame,
+    search_text: str,
+    scope_mode: str,
+    quick_filter: str,
+    target_type: str,
+) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    filtered = df.copy()
+    if scope_mode != "全部" and scope_mode != target_type:
+        return filtered.iloc[0:0].copy()
+
+    query = search_text.strip().lower()
+    if query:
+        symbol_match = filtered["symbol"].astype(str).str.lower().str.contains(query, regex=False)
+        name_match = filtered["name"].fillna("").astype(str).str.lower().str.contains(query, regex=False)
+        filtered = filtered.loc[symbol_match | name_match].copy()
+
+    if quick_filter == "缺最新價":
+        filtered = filtered.loc[filtered["latest_price"].isna()].copy()
+    elif quick_filter == "虧損中":
+        filtered = filtered.loc[filtered["unrealized_pnl"].fillna(0) < 0].copy()
+    elif quick_filter == "今日下跌":
+        filtered = filtered.loc[filtered["today_pnl"].fillna(0) < 0].copy()
+    elif quick_filter == "今日上漲":
+        filtered = filtered.loc[filtered["today_pnl"].fillna(0) > 0].copy()
+
+    return filtered
+
+
 if st.session_state.pop("refresh_market_snapshot", False):
     fetch_market_snapshot.clear()
 
@@ -343,9 +375,22 @@ stock_names = {
 }
 store_status = get_store_status()
 known_family_ids = list_family_ids()
+store_label = "Google Sheets" if store_status.using_google_sheets else "Local JSON"
 with st.sidebar:
     render_global_navigation("inventory")
     st.markdown("---")
+    st.markdown(
+        f"""
+<div class="sidebar-panel">
+    <div class="sidebar-panel-title">資料控制台</div>
+    <div class="sidebar-panel-body">
+        目前來源：<strong>{store_label}</strong><br>
+        切換 family_id 後，會重新載入對應家戶的庫存資料。
+    </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
     st.text_input(
         "family_id",
         value=st.session_state.get("inventory_family_id", get_default_family_id()),
@@ -358,7 +403,6 @@ with st.sidebar:
     if known_family_ids:
         st.caption("已知 family_id：" + ", ".join(known_family_ids[:8]))
     if store_status.using_google_sheets:
-        st.caption("持股儲存：Google Sheets")
         _sheet_edit_url = get_google_sheet_edit_url()
         if _sheet_edit_url:
             st.markdown(f"[開啟 Google Sheet 編輯庫存](<{_sheet_edit_url}>)")
@@ -419,6 +463,24 @@ if not holding_df.empty:
         holding_df.loc[holding_df["latest_price"].isna(), "symbol"].astype(str).tolist()
     )
 
+latest_price_date = "—"
+if not holding_df.empty:
+    priced_dates = [
+        str(value).strip()
+        for value in holding_df["price_date"].dropna().tolist()
+        if str(value).strip()
+    ]
+    if priced_dates:
+        latest_price_date = max(priced_dates)
+
+holding_count = len(holding_df)
+price_coverage_pct = (
+    priced_holding_count / holding_count * 100
+    if holding_count
+    else 0
+)
+coverage_class = "ok" if price_coverage_pct >= 99 else "warn"
+
 if market_snapshot_errors:
     st.warning(
         "行情快照抓取不完整："
@@ -431,6 +493,49 @@ elif missing_price_symbols:
         + ", ".join(missing_price_symbols[:12])
         + "。可先按一次「重新抓取行情」確認是否為暫時性 API 問題。"
     )
+
+with st.sidebar:
+    st.markdown(
+        f"""
+<div class="sidebar-panel">
+    <div class="sidebar-panel-title">同步狀態</div>
+    <div class="sidebar-panel-body">
+        行情覆蓋：<strong>{priced_holding_count}/{holding_count}</strong><br>
+        最新價格日：<strong>{latest_price_date}</strong><br>
+        {'已偵測到行情缺口，建議重新抓取。' if (market_snapshot_errors or missing_price_symbols) else '目前行情資料看起來完整。'}
+    </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+st.markdown(
+    f"""
+<div class="meta-strip">
+    <div class="meta-chip">
+        <div class="meta-chip-label">目前家戶</div>
+        <div class="meta-chip-value">{family_id}</div>
+        <div class="meta-chip-sub">目前正在查看的 family_id</div>
+    </div>
+    <div class="meta-chip">
+        <div class="meta-chip-label">持股來源</div>
+        <div class="meta-chip-value">{store_label}</div>
+        <div class="meta-chip-sub">目前資料後端</div>
+    </div>
+    <div class="meta-chip">
+        <div class="meta-chip-label">行情覆蓋率</div>
+        <div class="meta-chip-value {coverage_class}">{priced_holding_count}/{holding_count}</div>
+        <div class="meta-chip-sub">約 {price_coverage_pct:.0f}% 持股已取得最新價</div>
+    </div>
+    <div class="meta-chip">
+        <div class="meta-chip-label">最新價格日</div>
+        <div class="meta-chip-value">{latest_price_date}</div>
+        <div class="meta-chip-sub">庫存頁目前使用的價格日期</div>
+    </div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
 summary_cards = [
     ("總投入成本", format_money(total_cost), f"{len(holding_df)} 檔持股", "c-green", ""),
@@ -454,17 +559,33 @@ for row in [summary_cards[:3], summary_cards[3:]]:
 # ── 新增持股表單 ───────────────────────────────────────────────────────────────
 st.markdown('<div class="form-section-title">新增自選股 / 持股</div>', unsafe_allow_html=True)
 
-with st.form("add_stock_form", clear_on_submit=True):
-    col1, col2, col3, col4 = st.columns([2, 2, 2, 1.2])
-    with col1:
-        new_symbol = st.text_input("股票代碼", placeholder="例：2330")
-    with col2:
-        new_price = st.text_input("持有成本價（選填）", placeholder="例：150.5")
-    with col3:
-        new_shares = st.text_input("持有股數（選填）", placeholder="例：1000")
-    with col4:
-        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        submitted = st.form_submit_button("＋ 新增", use_container_width=True, type="primary")
+form_col, hint_col = st.columns([2.3, 1.2])
+with form_col:
+    with st.form("add_stock_form", clear_on_submit=True):
+        col1, col2, col3, col4 = st.columns([2, 2, 2, 1.2])
+        with col1:
+            new_symbol = st.text_input("股票代碼", placeholder="例：2330")
+        with col2:
+            new_price = st.text_input("持有成本價（選填）", placeholder="例：150.5")
+        with col3:
+            new_shares = st.text_input("持有股數（選填）", placeholder="例：1000")
+        with col4:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            submitted = st.form_submit_button("＋ 新增", use_container_width=True, type="primary")
+with hint_col:
+    st.markdown(
+        """
+<div class="panel-card">
+    <div class="panel-title">輸入小提示</div>
+    <div class="panel-body">
+        只填股票代碼：加入自選股。<br>
+        再填成本與股數：直接視為持股。<br>
+        如果剛切換 family_id，建議先按一次「重新抓取行情」。
+    </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
 if submitted:
     new_symbol = new_symbol.strip()
@@ -494,37 +615,99 @@ if submitted:
         st.success(f"✅ 已新增「{new_symbol}」{stock_names.get(new_symbol, '')} 至{item_type}清單")
         st.rerun()
 
-# ── 個股持倉比例 ───────────────────────────────────────────────────────────────
+# ── 快速篩選 ──────────────────────────────────────────────────────────────────
+st.markdown('<div class="form-section-title">快速篩選</div>', unsafe_allow_html=True)
+st.markdown('<div class="filter-toolbar-title">快速定位想看的持股與圖表視角</div>', unsafe_allow_html=True)
+filter_col1, filter_col2, filter_col3, filter_col4 = st.columns([2.2, 1.2, 1.4, 1.4])
+with filter_col1:
+    search_text = st.text_input("搜尋股票", value="", placeholder="輸入代碼或名稱", key="inventory_search_text")
+with filter_col2:
+    scope_mode = st.selectbox("清單範圍", ["全部", "持股", "自選股"], key="inventory_scope_mode")
+with filter_col3:
+    quick_filter = st.selectbox(
+        "快速篩選",
+        ["全部", "缺最新價", "虧損中", "今日下跌", "今日上漲"],
+        key="inventory_quick_filter",
+    )
+with filter_col4:
+    chart_metric = st.selectbox(
+        "圖表指標",
+        ["持倉比例", "目前市值", "未實現損益", "今日損益", "未實現報酬率"],
+        key="inventory_chart_metric",
+    )
+
+filtered_holding_df = filter_inventory_view(holding_df, search_text, scope_mode, quick_filter, "持股")
+filtered_watch_df = filter_inventory_view(watch_df, search_text, scope_mode, quick_filter, "自選股")
+
+# ── 個股圖表 ──────────────────────────────────────────────────────────────────
 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-if not holding_df.empty and holding_df["market_value"].notna().any():
-    st.markdown('<div class="form-section-title">個股持倉比例</div>', unsafe_allow_html=True)
-    chart_df = holding_df.dropna(subset=["market_value"]).copy()
+if not filtered_holding_df.empty and filtered_holding_df["market_value"].notna().any():
+    st.markdown('<div class="form-section-title">個股圖表</div>', unsafe_allow_html=True)
+    st.caption(f"目前圖表指標：{chart_metric}")
+    chart_specs = {
+        "持倉比例": {
+            "column": "position_ratio",
+            "label": "持倉比例 (%)",
+            "formatter": lambda x: f"{x:.1f}%",
+            "signed": False,
+        },
+        "目前市值": {
+            "column": "market_value",
+            "label": "目前市值",
+            "formatter": lambda x: format_money(x),
+            "signed": False,
+        },
+        "未實現損益": {
+            "column": "unrealized_pnl",
+            "label": "未實現損益",
+            "formatter": lambda x: format_signed_money(x),
+            "signed": True,
+        },
+        "今日損益": {
+            "column": "today_pnl",
+            "label": "今日損益",
+            "formatter": lambda x: format_signed_money(x),
+            "signed": True,
+        },
+        "未實現報酬率": {
+            "column": "unrealized_return",
+            "label": "未實現報酬率 (%)",
+            "formatter": lambda x: format_pct(x),
+            "signed": True,
+        },
+    }
+    chart_spec = chart_specs[chart_metric]
+    chart_df = filtered_holding_df.dropna(subset=[chart_spec["column"]]).copy()
     chart_df["label"] = chart_df["symbol"] + " " + chart_df["name"].fillna("")
-    chart_df = chart_df.sort_values("position_ratio", ascending=True)
-    chart_df["ratio_label"] = chart_df["position_ratio"].map(lambda x: f"{x:.1f}%")
-    chart_df["bar_color"] = chart_df["unrealized_pnl"].apply(
-        lambda value: "#d92d20" if pd.notna(value) and value > 0 else "#18804b"
-    )
-    fig = px.bar(
-        chart_df,
-        x="position_ratio",
-        y="label",
-        orientation="h",
-        text="ratio_label",
-        color="bar_color",
-        color_discrete_map="identity",
-        labels={"position_ratio": "持倉比例 (%)", "label": "股票"},
-        height=max(260, 48 * len(chart_df) + 90),
-    )
-    fig.update_traces(textposition="outside", cliponaxis=False)
-    fig.update_layout(
-        margin=dict(l=10, r=60, t=24, b=10),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        showlegend=False,
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    if not chart_df.empty:
+        chart_df = chart_df.sort_values(chart_spec["column"], ascending=True)
+        chart_df["metric_text"] = chart_df[chart_spec["column"]].map(chart_spec["formatter"])
+        if chart_spec["signed"]:
+            chart_df["bar_color"] = chart_df[chart_spec["column"]].apply(
+                lambda value: "#d92d20" if pd.notna(value) and value > 0 else "#18804b" if pd.notna(value) and value < 0 else "#5b6b7c"
+            )
+        else:
+            chart_df["bar_color"] = "#2563eb"
+        fig = px.bar(
+            chart_df,
+            x=chart_spec["column"],
+            y="label",
+            orientation="h",
+            text="metric_text",
+            color="bar_color",
+            color_discrete_map="identity",
+            labels={chart_spec["column"]: chart_spec["label"], "label": "股票"},
+            height=max(260, 48 * len(chart_df) + 90),
+        )
+        fig.update_traces(textposition="outside", cliponaxis=False)
+        fig.update_layout(
+            margin=dict(l=10, r=60, t=24, b=10),
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 # ── 自選股 / 持股清單 ─────────────────────────────────────────────────────────
 if not portfolio:
@@ -539,13 +722,16 @@ else:
     st.markdown(f"""
     <div class="list-header">
         <span>持股清單</span>
-        <span class="lh-count">{len(holding_df)} 檔</span>
+        <span class="lh-count">{len(filtered_holding_df)} / {len(holding_df)} 檔</span>
     </div>""", unsafe_allow_html=True)
+    st.caption("依目前市值由高到低排序，方便先看資金集中度最高的部位。")
 
     if holding_df.empty:
         st.info("目前沒有填入成本與股數的持股；只有股票代碼會歸在下方自選股。")
+    elif filtered_holding_df.empty:
+        st.info("目前篩選條件下沒有符合的持股。")
     else:
-        display_holding_df = holding_df.copy()
+        display_holding_df = filtered_holding_df.copy()
         display_holding_df = display_holding_df.sort_values("market_value", ascending=False, na_position="last")
         display_holding_df["股票"] = display_holding_df["symbol"] + " " + display_holding_df["name"].fillna("")
         display_holding_df["持有成本"] = display_holding_df["cost_price"]
@@ -617,13 +803,16 @@ else:
     st.markdown(f"""
     <div class="list-header">
         <span>自選股清單</span>
-        <span class="lh-count">{len(watch_df)} 檔</span>
+        <span class="lh-count">{len(filtered_watch_df)} / {len(watch_df)} 檔</span>
     </div>""", unsafe_allow_html=True)
+    st.caption("這裡保留尚未填入成本與股數的觀察名單，方便之後轉成正式持股。")
 
     if watch_df.empty:
         st.info("目前沒有自選股；新增股票時不填成本與股數，就會放到自選股清單。")
+    elif filtered_watch_df.empty:
+        st.info("目前篩選條件下沒有符合的自選股。")
     else:
-        watch_display = watch_df.copy()
+        watch_display = filtered_watch_df.copy()
         watch_display["股票"] = watch_display["symbol"] + " " + watch_display["name"].fillna("")
         watch_display["最新價"] = watch_display["latest_price"].map(lambda x: format_money(x, 2))
         watch_display["前收"] = watch_display["previous_price"].map(lambda x: format_money(x, 2))
