@@ -191,6 +191,75 @@ _CSS = """
 .empty-state h3 { color: var(--accent-neutral); margin: 14px 0 6px; font-size: 1.1rem; }
 .empty-state p  { color: var(--text-muted); font-size: 0.87rem; }
 
+.meta-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin: 6px 0 18px;
+}
+.meta-chip {
+    background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+    border: 1px solid var(--border-default);
+    border-radius: 12px;
+    padding: 14px 16px;
+    box-shadow: var(--shadow-soft);
+}
+.meta-chip-label {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+}
+.meta-chip-value {
+    color: var(--text-primary);
+    font-size: 1rem;
+    font-weight: 800;
+    line-height: 1.3;
+}
+.meta-chip-sub {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    margin-top: 4px;
+}
+.meta-chip-value.ok { color: var(--accent-positive); }
+.meta-chip-value.warn { color: var(--accent-warn); }
+
+.panel-card {
+    background: var(--bg-surface);
+    border-radius: 14px;
+    padding: 18px 20px;
+    box-shadow: var(--shadow-soft);
+    border: 1px solid var(--border-default);
+    margin-bottom: 14px;
+}
+.panel-title {
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    font-weight: 800;
+    margin-bottom: 6px;
+}
+.panel-body {
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+    line-height: 1.55;
+}
+.filter-toolbar {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: 14px;
+    padding: 14px 16px 8px;
+    box-shadow: var(--shadow-soft);
+    margin-bottom: 14px;
+}
+.filter-toolbar-title {
+    color: var(--text-primary);
+    font-size: 0.92rem;
+    font-weight: 800;
+    margin-bottom: 8px;
+}
+
 div[data-testid="stForm"] {
     background: var(--bg-surface);
     border-radius: 12px;
@@ -250,6 +319,12 @@ div[data-testid="stTabs"] button {
 }
 div[data-testid="stTabs"] button[aria-selected="true"] {
     color: var(--accent-primary) !important;
+}
+
+@media (max-width: 900px) {
+    .meta-strip {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
 div[data-testid="stSelectbox"] label p {
@@ -359,6 +434,29 @@ section[data-testid="stSidebar"] .stButton > button[kind="secondary"]:hover {
 }
 section[data-testid="stSidebar"] hr {
     border-color: #3a4b5d !important;
+}
+
+.sidebar-panel {
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.42) 0%, rgba(30, 41, 59, 0.58) 100%);
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    border-radius: 14px;
+    padding: 14px 14px 12px;
+    margin: 10px 0 12px;
+}
+.sidebar-panel-title {
+    color: #f8fafc;
+    font-size: 0.82rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+}
+.sidebar-panel-body {
+    color: #cbd5e1;
+    font-size: 0.78rem;
+    line-height: 1.55;
+}
+.sidebar-panel-body strong {
+    color: #ffffff;
 }
 
 section[data-testid="stSidebar"] div[data-testid="stButton"] button,
