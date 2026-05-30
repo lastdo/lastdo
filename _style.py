@@ -330,6 +330,33 @@ section[data-testid="stSidebar"] h2,
 section[data-testid="stSidebar"] h3 {
     color: var(--text-on-header) !important;
 }
+section[data-testid="stSidebar"] .stButton > button {
+    border-radius: 10px !important;
+    font-weight: 700 !important;
+    transition: all 0.18s ease !important;
+}
+section[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, var(--accent-primary), #4f8df7) !important;
+    border: 1px solid rgba(147, 197, 253, 0.45) !important;
+    color: var(--text-on-header) !important;
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.28) !important;
+}
+section[data-testid="stSidebar"] .stButton > button[kind="primary"]:hover {
+    background: linear-gradient(135deg, #1d4ed8, #60a5fa) !important;
+    border-color: rgba(191, 219, 254, 0.8) !important;
+    color: var(--text-on-header) !important;
+}
+section[data-testid="stSidebar"] .stButton > button[kind="secondary"] {
+    background: linear-gradient(135deg, rgba(37, 99, 235, 0.78), rgba(79, 141, 247, 0.92)) !important;
+    border: 1px solid rgba(147, 197, 253, 0.38) !important;
+    color: var(--text-on-header) !important;
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.18) !important;
+}
+section[data-testid="stSidebar"] .stButton > button[kind="secondary"]:hover {
+    background: linear-gradient(135deg, rgba(37, 99, 235, 0.92), rgba(96, 165, 250, 1)) !important;
+    border-color: rgba(191, 219, 254, 0.8) !important;
+    color: var(--text-on-header) !important;
+}
 section[data-testid="stSidebar"] hr {
     border-color: #3a4b5d !important;
 }

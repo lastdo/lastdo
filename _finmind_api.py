@@ -1,5 +1,6 @@
-import requests
 import pandas as pd
+import requests
+import time
 
 from _app_common import FINMIND_URL
 
@@ -44,3 +45,48 @@ def parse_price_dataframe(result: dict) -> pd.DataFrame:
         return pd.DataFrame()
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     return df
+
+
+def fetch_finmind_price_frame(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+    token: str = "",
+    timeout: int = 30,
+    sleep_seconds: float = 1.2,
+    raise_on_rate_limit: bool = False,
+) -> tuple[pd.DataFrame, int | None, str, object]:
+    params = {
+        "dataset": "TaiwanStockPrice",
+        "data_id": symbol,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    if token:
+        params["token"] = token
+
+    if sleep_seconds > 0:
+        time.sleep(sleep_seconds)
+
+    result = fetch_finmind_result(params, timeout=timeout)
+    status_code = get_status_code(result)
+    msg = get_result_message(result)
+    retry_after = get_retry_after(result)
+
+    if is_rate_limited(result):
+        if raise_on_rate_limit:
+            raise RuntimeError(f"FINMIND_LIMIT:{status_code}:{retry_after}:{msg}")
+        return pd.DataFrame(), status_code, msg, retry_after
+    if status_code != 200 or not result.get("data"):
+        return pd.DataFrame(), status_code, msg, retry_after
+
+    df = parse_price_dataframe(result)
+    if df.empty:
+        return pd.DataFrame(), status_code, msg, retry_after
+
+    df = df.rename(columns={"max": "high", "min": "low", "Trading_Volume": "volume"})
+    for col in ["open", "high", "low", "close", "volume"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+    return df, status_code, msg, retry_after

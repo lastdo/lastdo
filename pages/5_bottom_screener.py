@@ -1,7 +1,6 @@
 import os
 import re
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -10,16 +9,11 @@ import requests
 import streamlit as st
 from dotenv import load_dotenv
 from _finmind_api import (
-    fetch_finmind_result,
-    get_result_message,
-    get_retry_after,
-    get_status_code,
-    is_rate_limited,
-    parse_price_dataframe,
+    fetch_finmind_price_frame,
 )
 from _market_data import build_latest_revenue_view, build_price_snapshot, build_revenue_snapshot
 from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
-from _app_common import FINMIND_URL, get_runtime_secret
+from _app_common import get_runtime_secret
 from _portfolio_store import create_portfolio_item, get_default_family_id, load_portfolio
 
 load_dotenv()
@@ -230,13 +224,16 @@ with st.sidebar:
 
 
 def parse_finmind_retry_seconds(error_msg: str):
-    parts = str(error_msg).split(":", 2)
-    if len(parts) < 2:
+    parts = str(error_msg).split(":", 3)
+    numeric_parts = []
+    for part in parts[1:]:
+        try:
+            numeric_parts.append(max(int(float(part)), 0))
+        except Exception:
+            continue
+    if not numeric_parts:
         return None
-    try:
-        return max(int(float(parts[1])), 0)
-    except Exception:
-        return None
+    return numeric_parts[1] if len(numeric_parts) >= 2 else numeric_parts[0]
 
 
 def format_wait_time(seconds):
@@ -343,6 +340,28 @@ def render_result_view_selector(key: str, default: str = "標記說明") -> str:
     )
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_bottom_watchlist_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
+    start_date = (datetime.today().date() - timedelta(days=220)).strftime("%Y-%m-%d")
+    end_date = datetime.today().date().strftime("%Y-%m-%d")
+    try:
+        df, status_code, _msg, _retry_after = fetch_finmind_price_frame(
+            symbol,
+            start_date,
+            end_date,
+            token=token,
+            timeout=30,
+            sleep_seconds=0,
+            raise_on_rate_limit=False,
+        )
+        if status_code != 200 or df.empty:
+            return pd.DataFrame()
+        df = df.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
+        return df.tail(120).reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame()
+
+
 def render_watchlist_adder(result_df: pd.DataFrame, family_id: str, finmind_token: str = "") -> None:
     if result_df.empty:
         return
@@ -384,9 +403,9 @@ def render_watchlist_adder(result_df: pd.DataFrame, family_id: str, finmind_toke
 
     selected_symbol = str(selected["stock_id"]).strip()
     already_exists = selected_symbol in existing_symbols
-    end_date = datetime.today().date().strftime("%Y-%m-%d")
-    start_date = (datetime.today().date() - timedelta(days=220)).strftime("%Y-%m-%d")
-    chart_df = get_finmind_price_history(selected_symbol, start_date, end_date, finmind_token)
+    selected_close = pd.to_numeric(selected.get("close"), errors="coerce")
+    selected_support = pd.to_numeric(selected.get("support_price"), errors="coerce")
+    chart_df = get_bottom_watchlist_chart_data(selected_symbol, finmind_token)
 
     st.markdown("#### 技術線型")
     if chart_df.empty:
@@ -400,17 +419,17 @@ def render_watchlist_adder(result_df: pd.DataFrame, family_id: str, finmind_toke
         fig.add_trace(go.Scatter(x=chart_df["date"], y=chart_df["close"], mode="lines", name="收盤價", line=dict(color="#1d4ed8", width=2.5)))
         fig.add_trace(go.Scatter(x=chart_df["date"], y=chart_df["ma20"], mode="lines", name="MA20", line=dict(color="#f59e0b", width=1.8)))
         fig.add_trace(go.Scatter(x=chart_df["date"], y=chart_df["ma60"], mode="lines", name="MA60", line=dict(color="#16a34a", width=2)))
-        if pd.notna(pd.to_numeric(selected.get("support_price"), errors="coerce")):
-            fig.add_hline(y=float(selected["support_price"]), line_dash="dot", line_color="#dc2626", annotation_text="支撐價")
+        if pd.notna(selected_support):
+            fig.add_hline(y=float(selected_support), line_dash="dot", line_color="#dc2626", annotation_text="支撐價")
         fig.update_layout(height=300, margin=dict(l=8, r=8, t=10, b=8), paper_bgcolor="white", plot_bgcolor="white", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
         fig.update_xaxes(showgrid=False, title=None)
         fig.update_yaxes(showgrid=True, gridcolor="#e5edf7", title=None)
         st.plotly_chart(fig, use_container_width=True)
 
-    latest_ma60 = chart_df["close"].rolling(60, min_periods=1).mean().iloc[-1] if not chart_df.empty else None
-    rebound = ((selected["close"] / selected["support_price"]) - 1) * 100 if pd.notna(selected.get("close")) and pd.notna(selected.get("support_price")) and selected["support_price"] else None
+    latest_ma60 = pd.to_numeric(chart_df["ma60"].iloc[-1], errors="coerce") if not chart_df.empty else None
+    rebound = ((selected_close / selected_support) - 1) * 100 if pd.notna(selected_close) and pd.notna(selected_support) and selected_support else None
     st.caption(
-        f"目前收盤 {_fmt_number(pd.to_numeric(selected.get('close'), errors='coerce'))}｜"
+        f"目前收盤 {_fmt_number(selected_close)}｜"
         f"MA60 {_fmt_number(latest_ma60)}｜"
         f"距支撐價反彈 {_fmt_number(rebound, '%')}"
     )
@@ -491,33 +510,19 @@ def fetch_json_tpex(url: str) -> list:
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token: str = "") -> pd.DataFrame:
-    params = {
-        "dataset": "TaiwanStockPrice",
-        "data_id": symbol,
-        "start_date": start_date,
-        "end_date": end_date,
-    }
-    if token:
-        params["token"] = token
-
-    time.sleep(1.2)
-    result = fetch_finmind_result(params, timeout=30)
-    msg = get_result_message(result)
-    status_code = get_status_code(result)
-
-    if is_rate_limited(result):
-        raise RuntimeError(f"FINMIND_BANNED:{get_retry_after(result)}:{msg}")
-    if status_code != 200 or not result.get("data"):
+    df, status_code, msg, retry_after = fetch_finmind_price_frame(
+        symbol,
+        start_date,
+        end_date,
+        token=token,
+        timeout=30,
+        sleep_seconds=1.2,
+        raise_on_rate_limit=False,
+    )
+    if status_code in (402, 403, 429):
+        raise RuntimeError(f"FINMIND_LIMIT:{status_code}:{retry_after}:{msg}")
+    if status_code != 200 or df.empty:
         return pd.DataFrame()
-
-    df = parse_price_dataframe(result)
-    if df.empty:
-        return pd.DataFrame()
-    df = df.rename(columns={"max": "high", "min": "low", "Trading_Volume": "volume"})
-    for col in ["open", "high", "low", "close", "volume"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.dropna(subset=["date", "low", "close"]).sort_values("date").reset_index(drop=True)
     return df[["date", "open", "high", "low", "close", "volume"]]
 
@@ -649,49 +654,72 @@ history_failed = []
 _banned_msg = ""
 
 
-def fetch_support_row(row: pd.Series):
-    sid = str(row["stock_id"])
+def fetch_support_row(row_data: dict):
+    sid = str(row_data["stock_id"])
     try:
         hist = get_finmind_price_history(sid, start_str, end_str, finmind_token)
-        support_row = calc_bottom_support(row, hist)
+        support_row = calc_bottom_support(pd.Series(row_data), hist)
         if support_row is None:
             return "failed", sid
         return "ok", support_row
     except RuntimeError as e:
         err = str(e)
-        if "FINMIND_BANNED" in err:
+        if "FINMIND_LIMIT" in err:
             return "banned", err
         return "failed", sid
     except Exception:
         return "failed", sid
 
 
+
+
 done_count = 0
+row_iter = iter(df_history_targets.to_dict("records"))
+pending: dict = {}
+
 with ThreadPoolExecutor(max_workers=3) as executor:
-    futures = [
-        executor.submit(fetch_support_row, row)
-        for _, row in df_history_targets.iterrows()
-    ]
-
-    for future in as_completed(futures):
-        status, payload = future.result()
-        done_count += 1
-
-        if status == "ok":
-            support_rows.append(payload)
-        elif status == "banned":
-            _banned_msg = payload
-            for pending in futures:
-                pending.cancel()
+    for _ in range(min(3, n_targets)):
+        try:
+            row_data = next(row_iter)
+        except StopIteration:
             break
-        else:
-            history_failed.append(payload)
+        future = executor.submit(fetch_support_row, row_data)
+        pending[future] = str(row_data["stock_id"])
 
-        history_bar.progress(
-            min(done_count / n_targets, 1.0),
-            text=f"🔍 三線程查詢近 {support_months} 個月歷史股價（{done_count} / {n_targets} 檔）...",
-        )
+    while pending:
+        done, _not_done = wait(list(pending.keys()), return_when=FIRST_COMPLETED)
 
+        for future in done:
+            sid = pending.pop(future, "")
+            status, payload = future.result()
+            done_count += 1
+
+            if status == "ok":
+                support_rows.append(payload)
+            elif status == "banned":
+                _banned_msg = payload
+            else:
+                history_failed.append(payload or sid)
+
+            history_bar.progress(
+                min(done_count / n_targets, 1.0),
+                text=f"🔍 三線程查詢近 {support_months} 個月歷史股價（{done_count} / {n_targets} 檔）...",
+            )
+
+            if _banned_msg:
+                break
+
+            try:
+                row_data = next(row_iter)
+            except StopIteration:
+                continue
+            next_future = executor.submit(fetch_support_row, row_data)
+            pending[next_future] = str(row_data["stock_id"])
+
+        if _banned_msg:
+            for future in pending:
+                future.cancel()
+            break
 if _banned_msg and not support_rows:
     _retry_seconds = parse_finmind_retry_seconds(_banned_msg)
     history_bar.progress(1.0, text="❌ FinMind IP 封鎖")
