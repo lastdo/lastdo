@@ -6,7 +6,7 @@ from typing import Any
 
 import streamlit as st
 
-from _app_common import get_portfolio_file
+from data_layer.app_common import get_portfolio_file
 
 try:
     import gspread

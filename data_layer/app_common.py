@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 
-ROOT_DIR = Path(__file__).resolve().parent
+ROOT_DIR = Path(__file__).resolve().parent.parent
 FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
 
 

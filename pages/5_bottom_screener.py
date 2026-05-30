@@ -6,13 +6,13 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
-from _finmind_api import (
+from data_layer.finmind_api import (
     fetch_finmind_price_frame,
 )
-from _market_data import build_latest_revenue_view, build_price_snapshot, build_revenue_snapshot
-from _market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
-from _app_common import get_runtime_secret
-from _portfolio_store import create_portfolio_item, get_default_family_id, load_portfolio
+from data_layer.market_data import build_latest_revenue_view, build_price_snapshot, build_revenue_snapshot
+from data_layer.market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
+from data_layer.app_common import get_runtime_secret
+from data_layer.portfolio_store import create_portfolio_item, get_default_family_id, load_portfolio
 
 load_dotenv()
 
@@ -104,14 +104,14 @@ URL_TWSE_PRICE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 URL_TWSE_REV = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
 URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 URL_TPEX_REV = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"
-from _export_utils import dataframe_to_csv_bytes
+from data_layer.export_utils import dataframe_to_csv_bytes
 
 # ─────────────────────────────────────────────
 # 頁面設定
 # ─────────────────────────────────────────────
 st.set_page_config(page_title="底部剛起漲選股器", page_icon="📈", layout="wide")
 
-from _style import apply_style, page_header, render_global_navigation
+from render_layer.style import apply_style, page_header, render_global_navigation
 
 apply_style()
 page_header("📈", "底部剛起漲選股器", "策略：近半年低點支撐 ｜ 漲幅未明顯 ｜ 營收年增為正")

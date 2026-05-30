@@ -6,8 +6,8 @@ from plotly.subplots import make_subplots
 from groq import Groq
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from _app_common import ensure_analysis_dir, get_runtime_secret
-from _export_utils import CSV_ENCODING, dataframe_to_csv_bytes
+from data_layer.app_common import ensure_analysis_dir, get_runtime_secret
+from data_layer.export_utils import CSV_ENCODING, dataframe_to_csv_bytes
 
 ANALYSIS_DIR = ensure_analysis_dir()
 
@@ -22,7 +22,7 @@ st.set_page_config(
     layout="wide",
 )
 
-from _style import apply_style, page_header, render_global_navigation
+from render_layer.style import apply_style, page_header, render_global_navigation
 apply_style()
 page_header("📈", "AI 台股趨勢分析系統", "技術面分析 · AI 智慧報告 · 籌碼面觀察")
 
