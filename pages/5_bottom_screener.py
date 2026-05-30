@@ -1,11 +1,9 @@
-import os
 import re
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
 
 import pandas as pd
 import plotly.graph_objects as go
-import requests
 import streamlit as st
 from dotenv import load_dotenv
 from _finmind_api import (
@@ -107,7 +105,6 @@ URL_TWSE_REV = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
 URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 URL_TPEX_REV = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"
 from _export_utils import dataframe_to_csv_bytes
-from _page_bootstrap import ROOT_DIR
 
 # ─────────────────────────────────────────────
 # 頁面設定

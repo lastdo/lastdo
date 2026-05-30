@@ -60,8 +60,9 @@ def _normalize_price_date(raw_value) -> str:
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_market_snapshot() -> dict:
+def fetch_market_snapshot() -> tuple[dict, list[str]]:
     snapshot: dict[str, dict] = {}
+    errors: list[str] = []
 
     try:
         raw_twse = fetch_json_twse(URL_TWSE_PRICE)
@@ -80,8 +81,8 @@ def fetch_market_snapshot() -> dict:
                         "previous_price": previous_price,
                         "price_date": twse_date,
                     }
-    except Exception:
-        pass
+    except Exception as exc:
+        errors.append(f"TWSE fetch failed: {type(exc).__name__}")
 
     try:
         raw_tpex = fetch_json_tpex(URL_TPEX_PRICE)
@@ -104,10 +105,10 @@ def fetch_market_snapshot() -> dict:
                         "previous_price": previous_price,
                         "price_date": tpex_date,
                     }
-    except Exception:
-        pass
+    except Exception as exc:
+        errors.append(f"TPEX fetch failed: {type(exc).__name__}")
 
-    return snapshot
+    return snapshot, errors
 
 
 st.set_page_config(page_title="庫存股管理", page_icon="💼", layout="wide")
@@ -332,7 +333,10 @@ def build_portfolio_rows(portfolio: list, stock_names: dict, market_snapshot: di
     return df
 
 
-market_snapshot = fetch_market_snapshot()
+if st.session_state.pop("refresh_market_snapshot", False):
+    fetch_market_snapshot.clear()
+
+market_snapshot, market_snapshot_errors = fetch_market_snapshot()
 stock_names = {
     stock_id: info.get("stock_name", "")
     for stock_id, info in market_snapshot.items()
@@ -348,6 +352,9 @@ with st.sidebar:
         key="inventory_family_id",
         help="同一份 Google Sheet 內用 family_id 區分不同家人的持股。",
     )
+    if st.button("重新抓取行情", use_container_width=True):
+        st.session_state["refresh_market_snapshot"] = True
+        st.rerun()
     if known_family_ids:
         st.caption("已知 family_id：" + ", ".join(known_family_ids[:8]))
     if store_status.using_google_sheets:
@@ -405,6 +412,25 @@ today_pnl = (
 priced_holding_count = int(holding_df["market_value"].notna().sum()) if not holding_df.empty else 0
 
 total_exit_cost = holding_df["exit_cost"].dropna().sum() if not holding_df.empty else 0
+
+missing_price_symbols = []
+if not holding_df.empty:
+    missing_price_symbols = sorted(
+        holding_df.loc[holding_df["latest_price"].isna(), "symbol"].astype(str).tolist()
+    )
+
+if market_snapshot_errors:
+    st.warning(
+        "行情快照抓取不完整："
+        + " | ".join(market_snapshot_errors)
+        + "。可先按一次「重新抓取行情」。"
+    )
+elif missing_price_symbols:
+    st.warning(
+        f"目前有 {len(missing_price_symbols)} 檔持股沒有對到最新價："
+        + ", ".join(missing_price_symbols[:12])
+        + "。可先按一次「重新抓取行情」確認是否為暫時性 API 問題。"
+    )
 
 summary_cards = [
     ("總投入成本", format_money(total_cost), f"{len(holding_df)} 檔持股", "c-green", ""),

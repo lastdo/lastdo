@@ -1,13 +1,9 @@
-from pathlib import Path
-
-import os
 import streamlit as st
 import requests
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from groq import Groq
-import json
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from _app_common import ensure_analysis_dir, get_runtime_secret
@@ -205,17 +201,6 @@ def get_stock_name(symbol: str, token: str = "") -> str:
 # ─────────────────────────────────────────────
 # F-003 依日期範圍過濾資料
 # ─────────────────────────────────────────────
-def filter_by_date_range(
-    df: pd.DataFrame,
-    start_date,
-    end_date,
-) -> pd.DataFrame:
-    """根據使用者選擇的起迄日期過濾資料。"""
-    mask = (df["date"] >= pd.Timestamp(start_date)) & (
-        df["date"] <= pd.Timestamp(end_date)
-    )
-    return df.loc[mask].reset_index(drop=True)
-
 
 # ─────────────────────────────────────────────
 # 三大法人買賣超資料

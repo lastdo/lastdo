@@ -29,16 +29,6 @@ def get_retry_after(result: dict):
     return result.get("retry_after", "?")
 
 
-def parse_eps_dataframe(result: dict) -> pd.DataFrame:
-    df = pd.DataFrame(result.get("data") or [])
-    df = df[df["type"] == "EPS"].copy()
-    if df.empty:
-        return pd.DataFrame()
-    df["date"] = pd.to_datetime(df["date"])
-    df["eps"] = pd.to_numeric(df["value"], errors="coerce")
-    return df[["date", "eps"]].sort_values("date").reset_index(drop=True)
-
-
 def parse_price_dataframe(result: dict) -> pd.DataFrame:
     df = pd.DataFrame(result.get("data") or [])
     if df.empty:

@@ -1,6 +1,5 @@
 import streamlit as st
 from datetime import datetime
-import sys
 
 # 頁面標題
 st.title("Code Gym「高效 AI 投資術：No Code 打造自動化股票理專」環境測試")

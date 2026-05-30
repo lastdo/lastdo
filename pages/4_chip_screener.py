@@ -1,4 +1,3 @@
-import os
 import re
 import requests
 import streamlit as st
@@ -28,7 +27,6 @@ FAMILY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 URL_TWSE_PRICE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 from _export_utils import dataframe_to_csv_bytes
-from _page_bootstrap import ROOT_DIR
 
 # ─────────────────────────────────────────────
 # 頁面設定

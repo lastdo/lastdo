@@ -3,7 +3,6 @@ import requests
 import pandas as pd
 import plotly.graph_objects as go
 import anthropic
-import json
 from datetime import datetime, timedelta
 
 # ─────────────────────────────────────────────
