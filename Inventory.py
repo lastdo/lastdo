@@ -1,5 +1,6 @@
 import streamlit as st
 from datetime import datetime
+import html
 import re
 
 import pandas as pd
@@ -222,6 +223,119 @@ st.markdown("""
     border-color: var(--accent-risk) !important;
 }
 
+@media (max-width: 768px) {
+    .inv-header {
+        padding: 16px 14px;
+        border-radius: 12px;
+        gap: 12px;
+        margin-bottom: 14px;
+    }
+    .inv-header-icon { font-size: 2rem; }
+    .inv-header h1 {
+        font-size: 1.18rem;
+        margin-bottom: 2px;
+        letter-spacing: 0;
+    }
+    .inv-header p { font-size: 0.77rem; line-height: 1.45; }
+    .stat-card { padding: 14px 14px; }
+    .stat-value { font-size: 1.2rem; }
+    .sym-badge {
+        font-size: 0.96rem;
+        padding: 3px 9px;
+        letter-spacing: 0;
+    }
+}
+
+.mobile-card-list { display: none; }
+
+@media (max-width: 768px) {
+    .mobile-card-list {
+        display: grid;
+        gap: 10px;
+        margin: 8px 0 12px;
+    }
+    .mobile-stock-card {
+        background: #ffffff;
+        border: 1px solid var(--border-default);
+        border-radius: 10px;
+        padding: 12px;
+        box-shadow: var(--shadow-soft);
+    }
+    .mobile-stock-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 10px;
+    }
+    .mobile-stock-symbol {
+        color: var(--bg-header-end);
+        font-size: 1.05rem;
+        font-weight: 900;
+        line-height: 1.2;
+    }
+    .mobile-stock-name {
+        color: var(--text-secondary);
+        font-size: 0.78rem;
+        font-weight: 700;
+        margin-top: 2px;
+    }
+    .mobile-stock-badge {
+        border-radius: 999px;
+        padding: 3px 8px;
+        font-size: 0.72rem;
+        font-weight: 800;
+        white-space: nowrap;
+    }
+    .mobile-stock-badge.holding {
+        background: var(--accent-risk-soft);
+        color: #b42318;
+    }
+    .mobile-stock-badge.watch {
+        background: var(--accent-primary-soft);
+        color: #0b5ed7;
+    }
+    .mobile-stock-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+    }
+    .mobile-stock-cell {
+        background: #f8fbff;
+        border: 1px solid #e4edf8;
+        border-radius: 8px;
+        padding: 8px;
+        min-width: 0;
+    }
+    .mobile-stock-label {
+        color: var(--text-muted);
+        font-size: 0.68rem;
+        font-weight: 800;
+        margin-bottom: 3px;
+    }
+    .mobile-stock-value {
+        color: var(--text-primary);
+        font-size: 0.9rem;
+        font-weight: 800;
+        overflow-wrap: anywhere;
+    }
+    .mobile-stock-value.pos { color: var(--accent-risk); }
+    .mobile-stock-value.neg { color: var(--accent-positive); }
+    .col-hdr {
+        display: none;
+    }
+    .row-divider {
+        margin: 12px 0;
+    }
+    div[data-testid="stNumberInput"] input,
+    div[data-testid="stTextInput"] input {
+        min-height: 42px;
+        font-size: 1rem;
+    }
+    .stButton > button {
+        min-height: 42px;
+    }
+}
 
 /* ── 隱藏預設 Streamlit 頁尾 ── */
 </style>
@@ -275,6 +389,117 @@ def pnl_color_style(value) -> str:
     if value is None or pd.isna(value) or value == 0:
         return ""
     return "color: #dc2626; font-weight: 700;" if value > 0 else "color: #16a34a; font-weight: 700;"
+
+
+def _escape_html(value) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def _mobile_value_class(value) -> str:
+    return pnl_class(value)
+
+
+def render_mobile_holding_cards(df: pd.DataFrame) -> None:
+    if df.empty:
+        return
+
+    cards = []
+    for row in df.head(20).to_dict("records"):
+        symbol = _escape_html(row.get("symbol", ""))
+        name = _escape_html(row.get("name") or "—")
+        pnl = row.get("unrealized_pnl")
+        today_pnl = row.get("today_pnl")
+        cards.append(
+            f"""
+<div class="mobile-stock-card">
+  <div class="mobile-stock-top">
+    <div>
+      <div class="mobile-stock-symbol">{symbol}</div>
+      <div class="mobile-stock-name">{name}</div>
+    </div>
+    <div class="mobile-stock-badge holding">持股</div>
+  </div>
+  <div class="mobile-stock-grid">
+    <div class="mobile-stock-cell">
+      <div class="mobile-stock-label">最新價</div>
+      <div class="mobile-stock-value">{_escape_html(format_money(row.get("latest_price"), 2))}</div>
+    </div>
+    <div class="mobile-stock-cell">
+      <div class="mobile-stock-label">股數</div>
+      <div class="mobile-stock-value">{_escape_html(f"{int(row.get('shares')):,} 股" if pd.notna(row.get("shares")) else "—")}</div>
+    </div>
+    <div class="mobile-stock-cell">
+      <div class="mobile-stock-label">市值</div>
+      <div class="mobile-stock-value">{_escape_html(format_money(row.get("market_value")))}</div>
+    </div>
+    <div class="mobile-stock-cell">
+      <div class="mobile-stock-label">未實現損益</div>
+      <div class="mobile-stock-value {_mobile_value_class(pnl)}">{_escape_html(format_signed_money(pnl))}</div>
+    </div>
+    <div class="mobile-stock-cell">
+      <div class="mobile-stock-label">報酬率</div>
+      <div class="mobile-stock-value {_mobile_value_class(row.get("unrealized_return"))}">{_escape_html(format_pct(row.get("unrealized_return")))}</div>
+    </div>
+    <div class="mobile-stock-cell">
+      <div class="mobile-stock-label">今日損益</div>
+      <div class="mobile-stock-value {_mobile_value_class(today_pnl)}">{_escape_html(format_signed_money(today_pnl))}</div>
+    </div>
+  </div>
+</div>"""
+        )
+
+    st.markdown(
+        f"""<div class="mobile-card-list">{''.join(cards)}</div>""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_mobile_watch_cards(df: pd.DataFrame, analysis_index: dict[str, dict]) -> None:
+    if df.empty:
+        return
+
+    cards = []
+    for row in df.head(20).to_dict("records"):
+        symbol_raw = str(row.get("symbol", ""))
+        symbol = _escape_html(symbol_raw)
+        name = _escape_html(row.get("name") or "—")
+        today_return = row.get("today_return")
+        analysis_count = analysis_index.get(symbol_raw, {}).get("count", 0)
+        cards.append(
+            f"""
+<div class="mobile-stock-card">
+  <div class="mobile-stock-top">
+    <div>
+      <div class="mobile-stock-symbol">{symbol}</div>
+      <div class="mobile-stock-name">{name}</div>
+    </div>
+    <div class="mobile-stock-badge watch">自選</div>
+  </div>
+  <div class="mobile-stock-grid">
+    <div class="mobile-stock-cell">
+      <div class="mobile-stock-label">最新價</div>
+      <div class="mobile-stock-value">{_escape_html(format_money(row.get("latest_price"), 2))}</div>
+    </div>
+    <div class="mobile-stock-cell">
+      <div class="mobile-stock-label">漲跌幅</div>
+      <div class="mobile-stock-value {_mobile_value_class(today_return)}">{_escape_html(format_pct(today_return))}</div>
+    </div>
+    <div class="mobile-stock-cell">
+      <div class="mobile-stock-label">成交量</div>
+      <div class="mobile-stock-value">{_escape_html(f"{row.get('vol_lot'):,.0f} 張" if pd.notna(row.get("vol_lot")) else "—")}</div>
+    </div>
+    <div class="mobile-stock-cell">
+      <div class="mobile-stock-label">分析記錄</div>
+      <div class="mobile-stock-value">{_escape_html(f"{int(analysis_count)} 筆" if analysis_count else "—")}</div>
+    </div>
+  </div>
+</div>"""
+        )
+
+    st.markdown(
+        f"""<div class="mobile-card-list">{''.join(cards)}</div>""",
+        unsafe_allow_html=True,
+    )
 
 
 def estimate_fee(amount, rate: float) -> int | None:
@@ -843,6 +1068,7 @@ else:
             "價格日",
         ]
         display_columns = compact_columns if holding_view_mode == "精簡檢視" else full_columns
+        render_mobile_holding_cards(display_holding_df)
         styled_holding_df = display_holding_df[display_columns].style.format({
             "持有成本": lambda x: format_money(x, 2),
             "股數": lambda x: f"{int(x):,} 股" if pd.notna(x) else "—",
@@ -899,6 +1125,7 @@ else:
         watch_display["分析記錄"] = watch_display["analysis_count"].map(lambda x: f"{int(x)} 筆" if x else "—")
         watch_display["最近分析"] = watch_display["analysis_latest_at"].replace("", "—")
         watch_display["價格日"] = watch_display["price_date"].replace("", "—")
+        render_mobile_watch_cards(watch_display, analysis_index)
         watch_view = watch_display[
             ["股票", "最新價", "前收", "漲跌幅", "成交量(張)", "分析記錄", "最近分析", "價格日"]
         ].style.format({

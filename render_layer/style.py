@@ -329,6 +329,120 @@ div[data-testid="stTabs"] button[aria-selected="true"] {
     }
 }
 
+@media (max-width: 768px) {
+    .block-container {
+        padding-left: 0.85rem !important;
+        padding-right: 0.85rem !important;
+        padding-top: 1rem !important;
+    }
+
+    .page-header,
+    .inv-header {
+        padding: 16px 14px;
+        border-radius: 12px;
+        gap: 12px;
+        margin-bottom: 14px;
+    }
+    .page-header-icon,
+    .inv-header-icon {
+        font-size: 1.9rem;
+    }
+    .page-header h1,
+    .inv-header h1 {
+        font-size: 1.18rem;
+        margin-bottom: 2px;
+        letter-spacing: 0;
+    }
+    .page-header p,
+    .inv-header p {
+        font-size: 0.77rem;
+        line-height: 1.45;
+    }
+
+    .meta-strip {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+    .meta-chip {
+        padding: 12px 12px;
+    }
+    .stat-card {
+        padding: 14px 14px;
+    }
+    .stat-value {
+        font-size: 1.24rem;
+    }
+    .stat-sub {
+        font-size: 0.72rem;
+    }
+
+    div[data-testid="stForm"] {
+        padding: 12px 12px 8px;
+    }
+    div[data-testid="stTextInput"] input,
+    div[data-testid="stNumberInput"] input,
+    div[data-testid="stDateInput"] input {
+        min-height: 42px;
+        font-size: 1rem;
+    }
+    div[data-testid="stSelectbox"] > div[data-baseweb="select"] > div {
+        min-height: 42px;
+    }
+    .stButton > button {
+        min-height: 42px;
+        white-space: normal !important;
+        line-height: 1.25 !important;
+    }
+    .filter-toolbar {
+        padding: 10px 10px 6px;
+        margin-bottom: 10px;
+    }
+    .panel-card {
+        padding: 14px 14px;
+    }
+    .table-header,
+    .list-header {
+        padding: 9px 10px;
+    }
+    .sym-badge {
+        font-size: 0.98rem;
+        padding: 3px 9px;
+        letter-spacing: 0;
+    }
+
+    /* Make Streamlit column layouts stack on phone widths. */
+    div[data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap;
+        gap: 0.45rem;
+    }
+    div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+        min-width: 100% !important;
+        flex: 1 1 100% !important;
+    }
+
+    div[data-testid="stDataFrame"] {
+        overflow-x: auto;
+    }
+    div[data-testid="stDataFrame"] [role="columnheader"],
+    div[data-testid="stDataFrame"] [role="gridcell"] {
+        font-size: 0.8rem !important;
+    }
+
+    div[data-testid="stTabs"] {
+        overflow-x: auto;
+    }
+    div[data-testid="stTabs"] button {
+        min-width: max-content;
+        padding-left: 10px;
+        padding-right: 10px;
+    }
+
+    section[data-testid="stSidebar"] .sidebar-panel {
+        padding: 11px 10px;
+        margin: 8px 0 10px;
+    }
+}
+
 div[data-testid="stSelectbox"] label p {
     font-weight: 700 !important;
     color: var(--text-primary) !important;
