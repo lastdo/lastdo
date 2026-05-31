@@ -2,7 +2,6 @@ import re
 import requests
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from data_layer.finmind_api import fetch_finmind_price_frame
@@ -12,9 +11,10 @@ from data_layer.institutional_flow import (
 )
 from data_layer.market_data import build_price_snapshot
 from data_layer.market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
-from data_layer.portfolio_store import create_portfolio_item, get_default_family_id, load_portfolio
+from data_layer.portfolio_store import get_default_family_id
 from data_layer.public_valuation import attach_public_valuation, fetch_public_pe_ratios
 from data_layer.app_common import get_runtime_secret
+from render_layer.watchlist import format_watchlist_number, render_watchlist_adder as render_watchlist_adder_base
 
 load_dotenv()
 
@@ -333,80 +333,36 @@ def get_finmind_price_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
 
 
 def render_watchlist_adder(result_df: pd.DataFrame, family_id: str, finmind_token: str = "") -> None:
-    if result_df.empty:
-        return
-
-    def _fmt_number(value, suffix: str = "") -> str:
-        return f"{value:.2f}{suffix}" if pd.notna(value) else f"—{suffix}"
-
-    portfolio_items = load_portfolio(family_id)
-    existing_symbols = {
-        str(item.get("stock_id") or item.get("symbol") or "").strip()
-        for item in portfolio_items
-    }
-
-    action_df = result_df[["stock_id", "stock_name", "market", "close", "foreign_net_buy_lot", "pe_ratio"]].copy()
-    action_df["close"] = pd.to_numeric(action_df["close"], errors="coerce")
-    action_df["foreign_net_buy_lot"] = pd.to_numeric(action_df["foreign_net_buy_lot"], errors="coerce")
-    action_df["pe_ratio"] = pd.to_numeric(action_df["pe_ratio"], errors="coerce")
-    action_df["label"] = action_df.apply(
-        lambda row: (
+    def _label(row: pd.Series) -> str:
+        return (
             f"{row['stock_id']} {row['stock_name']} | {row['market']} | "
-            f"收盤 {_fmt_number(row['close'])} | "
-            f"外資近N日買超 {_fmt_number(row['foreign_net_buy_lot'])} 張 | "
-            f"PE {_fmt_number(row['pe_ratio'])}"
-        ),
-        axis=1,
-    )
-    options = action_df.to_dict("records")
-    default_index = next((idx for idx, row in enumerate(options) if row["stock_id"] not in existing_symbols), 0)
-
-    st.markdown("#### 加入庫存股自選名單")
-    st.caption(f"目標 family_id：`{family_id}`。加入後會以「自選股」形式出現在庫存股頁，不會填入持有成本與股數。")
-    selected = st.selectbox(
-        "選擇要加入自選股的股票",
-        options=options,
-        index=default_index,
-        format_func=lambda row: row["label"],
-        key="chip_watchlist_symbol",
-    )
-
-    selected_symbol = str(selected["stock_id"]).strip()
-    already_exists = selected_symbol in existing_symbols
-    selected_close = pd.to_numeric(selected.get("close"), errors="coerce")
-    chart_df = get_finmind_price_chart_data(selected_symbol, finmind_token)
-
-    st.markdown("#### 技術線型")
-    if chart_df.empty:
-        st.info("這檔股票暫時抓不到技術線型資料，請稍後再試。")
-    else:
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=chart_df["date"], y=chart_df["close"], mode="lines", name="收盤價", line=dict(color="#1d4ed8", width=2.5)))
-        fig.add_trace(go.Scatter(x=chart_df["date"], y=chart_df["ma20"], mode="lines", name="MA20", line=dict(color="#f59e0b", width=1.8)))
-        fig.add_trace(go.Scatter(x=chart_df["date"], y=chart_df["ma60"], mode="lines", name="MA60", line=dict(color="#16a34a", width=2)))
-        fig.update_layout(height=300, margin=dict(l=8, r=8, t=10, b=8), paper_bgcolor="white", plot_bgcolor="white", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
-        fig.update_xaxes(showgrid=False, title=None)
-        fig.update_yaxes(showgrid=True, gridcolor="#e5edf7", title=None)
-        st.plotly_chart(fig, use_container_width=True)
-
-    latest_ma60 = pd.to_numeric(chart_df["ma60"].iloc[-1], errors="coerce") if not chart_df.empty else None
-    premium = ((selected_close / latest_ma60) - 1) * 100 if pd.notna(selected_close) and pd.notna(latest_ma60) and latest_ma60 else None
-    st.caption(
-        f"目前收盤 {_fmt_number(selected_close)}｜"
-        f"MA60 {_fmt_number(latest_ma60)}｜"
-        f"季線溢價 {_fmt_number(premium, '%')}"
-    )
-    if already_exists:
-        st.info(f"{selected_symbol} 已經在這組 family_id 的持股 / 自選股清單中。")
-
-    if st.button("加入自選股", type="primary", disabled=already_exists, use_container_width=True, key="chip_watchlist_add"):
-        create_portfolio_item(
-            family_id=family_id,
-            stock_id=selected_symbol,
-            stock_name=str(selected["stock_name"]).strip(),
+            f"收盤 {format_watchlist_number(row['close'])} | "
+            f"外資近N日買超 {format_watchlist_number(row['foreign_net_buy_lot'])} 張 | "
+            f"PE {format_watchlist_number(row['pe_ratio'])}"
         )
-        st.success(f"已將 {selected_symbol} {selected['stock_name']} 加入自選股。")
-        st.rerun()
+
+    def _caption(selected: dict, chart_df: pd.DataFrame) -> str:
+        selected_close = pd.to_numeric(selected.get("close"), errors="coerce")
+        latest_ma60 = pd.to_numeric(chart_df["ma60"].iloc[-1], errors="coerce") if not chart_df.empty else None
+        premium = ((selected_close / latest_ma60) - 1) * 100 if pd.notna(selected_close) and pd.notna(latest_ma60) and latest_ma60 else None
+        return (
+            f"目前收盤 {format_watchlist_number(selected_close)}｜"
+            f"MA60 {format_watchlist_number(latest_ma60)}｜"
+            f"季線溢價 {format_watchlist_number(premium, '%')}"
+        )
+
+    render_watchlist_adder_base(
+        result_df,
+        family_id,
+        select_columns=["stock_id", "stock_name", "market", "close", "foreign_net_buy_lot", "pe_ratio"],
+        numeric_columns=["close", "foreign_net_buy_lot", "pe_ratio"],
+        label_builder=_label,
+        chart_loader=get_finmind_price_chart_data,
+        selectbox_key="chip_watchlist_symbol",
+        add_button_key="chip_watchlist_add",
+        finmind_token=finmind_token,
+        caption_builder=_caption,
+    )
 
 
 family_id = st.session_state.get("inventory_family_id", get_default_family_id()).strip()
