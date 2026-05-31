@@ -6,6 +6,10 @@ import pandas as pd
 import plotly.express as px
 
 from data_layer.app_common import configure_runtime, ensure_analysis_dir
+from data_layer.data_diagnostics import (
+    fetch_json_with_diagnostic,
+    make_partial_diagnostic,
+)
 from data_layer.market_api import fetch_json_tpex, fetch_json_twse
 from data_layer.portfolio_store import (
     create_portfolio_item,
@@ -17,6 +21,7 @@ from data_layer.portfolio_store import (
     load_portfolio as load_portfolio_items,
     update_portfolio_item as update_portfolio_record,
 )
+from render_layer.diagnostics import render_data_diagnostics
 from render_layer.style import (
     apply_style,
     render_empty_state,
@@ -69,57 +74,66 @@ def _normalize_price_date(raw_value) -> str:
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_market_snapshot() -> tuple[dict, list[str]]:
+def fetch_market_snapshot() -> tuple[dict, list[str], list[dict]]:
     snapshot: dict[str, dict] = {}
     errors: list[str] = []
+    diagnostics = []
 
-    try:
-        raw_twse = fetch_json_twse(URL_TWSE_PRICE)
-        twse_date = _normalize_price_date(raw_twse[0].get("Date") if raw_twse else None)
-        df_twse = pd.DataFrame(raw_twse)
-        if {"Code", "Name", "ClosingPrice"}.issubset(df_twse.columns):
-            for row in df_twse.to_dict("records"):
-                stock_id = str(row.get("Code", "")).strip()
-                close_price = _parse_market_number(row.get("ClosingPrice"))
-                change_value = _parse_market_number(row.get("Change"))
-                previous_price = close_price - change_value if close_price is not None and change_value is not None else None
-                if stock_id:
-                    snapshot[stock_id] = {
-                        "stock_name": str(row.get("Name", "")).strip(),
-                        "latest_price": close_price,
-                        "previous_price": previous_price,
-                        "vol_lot": (_parse_market_number(row.get("TradeVolume")) or 0) / 1000,
-                        "price_date": twse_date,
-                    }
-    except Exception as exc:
-        errors.append(f"TWSE fetch failed: {type(exc).__name__}")
+    raw_twse, diag_twse = fetch_json_with_diagnostic(fetch_json_twse, URL_TWSE_PRICE, "TWSE 行情快照")
+    diagnostics.append(diag_twse.to_dict())
+    if raw_twse:
+        try:
+            twse_date = _normalize_price_date(raw_twse[0].get("Date") if raw_twse else None)
+            df_twse = pd.DataFrame(raw_twse)
+            if {"Code", "Name", "ClosingPrice"}.issubset(df_twse.columns):
+                for row in df_twse.to_dict("records"):
+                    stock_id = str(row.get("Code", "")).strip()
+                    close_price = _parse_market_number(row.get("ClosingPrice"))
+                    change_value = _parse_market_number(row.get("Change"))
+                    previous_price = close_price - change_value if close_price is not None and change_value is not None else None
+                    if stock_id:
+                        snapshot[stock_id] = {
+                            "stock_name": str(row.get("Name", "")).strip(),
+                            "latest_price": close_price,
+                            "previous_price": previous_price,
+                            "vol_lot": (_parse_market_number(row.get("TradeVolume")) or 0) / 1000,
+                            "price_date": twse_date,
+                        }
+        except Exception as exc:
+            errors.append(f"TWSE parse failed: {type(exc).__name__}")
+    else:
+        errors.append("TWSE fetch failed")
 
-    try:
-        raw_tpex = fetch_json_tpex(URL_TPEX_PRICE)
-        tpex_date = _normalize_price_date(raw_tpex[0].get("Date") if raw_tpex else None)
-        df_tpex = pd.DataFrame(raw_tpex)
-        if {"SecuritiesCompanyCode", "CompanyName", "Close"}.issubset(df_tpex.columns):
-            for row in df_tpex.to_dict("records"):
-                stock_id = str(row.get("SecuritiesCompanyCode", "")).strip()
-                close_price = _parse_market_number(row.get("Close"))
-                change_value = _parse_market_number(
-                    row.get("Change")
-                    or row.get("Spread")
-                    or row.get("PriceChange")
-                )
-                previous_price = close_price - change_value if close_price is not None and change_value is not None else None
-                if stock_id:
-                    snapshot[stock_id] = {
-                        "stock_name": str(row.get("CompanyName", "")).strip(),
-                        "latest_price": close_price,
-                        "previous_price": previous_price,
-                        "vol_lot": (_parse_market_number(row.get("TradingShares")) or 0) / 1000,
-                        "price_date": tpex_date,
-                    }
-    except Exception as exc:
-        errors.append(f"TPEX fetch failed: {type(exc).__name__}")
+    raw_tpex, diag_tpex = fetch_json_with_diagnostic(fetch_json_tpex, URL_TPEX_PRICE, "TPEX 行情快照")
+    diagnostics.append(diag_tpex.to_dict())
+    if raw_tpex:
+        try:
+            tpex_date = _normalize_price_date(raw_tpex[0].get("Date") if raw_tpex else None)
+            df_tpex = pd.DataFrame(raw_tpex)
+            if {"SecuritiesCompanyCode", "CompanyName", "Close"}.issubset(df_tpex.columns):
+                for row in df_tpex.to_dict("records"):
+                    stock_id = str(row.get("SecuritiesCompanyCode", "")).strip()
+                    close_price = _parse_market_number(row.get("Close"))
+                    change_value = _parse_market_number(
+                        row.get("Change")
+                        or row.get("Spread")
+                        or row.get("PriceChange")
+                    )
+                    previous_price = close_price - change_value if close_price is not None and change_value is not None else None
+                    if stock_id:
+                        snapshot[stock_id] = {
+                            "stock_name": str(row.get("CompanyName", "")).strip(),
+                            "latest_price": close_price,
+                            "previous_price": previous_price,
+                            "vol_lot": (_parse_market_number(row.get("TradingShares")) or 0) / 1000,
+                            "price_date": tpex_date,
+                        }
+        except Exception as exc:
+            errors.append(f"TPEX parse failed: {type(exc).__name__}")
+    else:
+        errors.append("TPEX fetch failed")
 
-    return snapshot, errors
+    return snapshot, errors, diagnostics
 
 
 st.set_page_config(page_title="庫存股管理", page_icon="💼", layout="wide")
@@ -413,7 +427,7 @@ def load_analysis_index() -> dict[str, dict]:
 if st.session_state.pop("refresh_market_snapshot", False):
     fetch_market_snapshot.clear()
 
-market_snapshot, market_snapshot_errors = fetch_market_snapshot()
+market_snapshot, market_snapshot_errors, market_snapshot_diagnostics = fetch_market_snapshot()
 stock_names = {
     stock_id: info.get("stock_name", "")
     for stock_id, info in market_snapshot.items()
@@ -528,12 +542,24 @@ price_coverage_pct = (
 coverage_class = "ok" if price_coverage_pct >= 99 else "warn"
 
 if market_snapshot_errors:
+    render_data_diagnostics(market_snapshot_diagnostics, expanded=True)
     st.warning(
         "行情快照抓取不完整："
         + " | ".join(market_snapshot_errors)
         + "。可先按一次「重新抓取行情」。"
     )
 elif missing_price_symbols:
+    render_data_diagnostics(
+        market_snapshot_diagnostics + [
+            make_partial_diagnostic(
+                "庫存行情覆蓋",
+                "部分持股沒有對到最新價，可能是代碼、上市櫃來源或上游資料延遲造成。",
+                records=priced_holding_count,
+                sample_ids=missing_price_symbols[:10],
+            ).to_dict()
+        ],
+        expanded=True,
+    )
     st.warning(
         f"目前有 {len(missing_price_symbols)} 檔持股沒有對到最新價："
         + ", ".join(missing_price_symbols[:12])
@@ -900,6 +926,7 @@ else:
         for i, stock in enumerate(portfolio):
             row_id = str(stock.get("row_id", "")).strip()
             symbol = str(stock.get("symbol", ""))
+            row_key = row_id or f"{family_id}_{symbol}"
             matched = portfolio_df[portfolio_df["row_id"] == row_id]
             item_type = matched.iloc[0]["type"] if not matched.empty else "自選股"
             name = stock_names.get(symbol, "")
@@ -925,7 +952,7 @@ else:
                         min_value=0.0,
                         step=0.1,
                         value=float(default_price or 0.0),
-                        key=f"price_{i}",
+                        key=f"price_{row_key}",
                         label_visibility="collapsed",
                     )
                 with edit_col2:
@@ -934,10 +961,10 @@ else:
                         min_value=0,
                         step=1,
                         value=int(default_shares or 0),
-                        key=f"shares_{i}",
+                        key=f"shares_{row_key}",
                         label_visibility="collapsed",
                     )
-                if st.button("儲存", key=f"save_{i}", use_container_width=True):
+                if st.button("儲存", key=f"save_{row_key}", use_container_width=True):
                     update_portfolio_record(
                         row_id=row_id,
                         family_id=family_id,
@@ -949,11 +976,11 @@ else:
             with c5:
                 btn_col1, btn_col2 = st.columns([3, 1])
                 with btn_col1:
-                    if st.button("📈 AI 分析", key=f"analyze_{i}", use_container_width=True, type="primary"):
+                    if st.button("📈 AI 分析", key=f"analyze_{row_key}", use_container_width=True, type="primary"):
                         st.session_state["selected_symbol"] = symbol
                         st.switch_page("pages/1_app_tw.py")
                 with btn_col2:
-                    if st.button("🗑️", key=f"del_{i}", help=f"移除 {symbol}"):
+                    if st.button("🗑️", key=f"del_{row_key}", help=f"移除 {symbol}"):
                         delete_portfolio_item(row_id=row_id, family_id=family_id)
                         st.toast(f"✅ 已移除「{symbol}」")
                         st.rerun()

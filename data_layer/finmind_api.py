@@ -6,8 +6,19 @@ from data_layer.app_common import FINMIND_URL
 
 
 def fetch_finmind_result(params: dict, timeout: int = 20) -> dict:
-    resp = requests.get(FINMIND_URL, params=params, timeout=timeout)
-    return resp.json()
+    last_exc = None
+    for attempt in range(3):
+        try:
+            resp = requests.get(FINMIND_URL, params=params, timeout=timeout)
+            resp.raise_for_status()
+            result = resp.json()
+            if not is_rate_limited(result):
+                return result
+            return result
+        except Exception as exc:
+            last_exc = exc
+            time.sleep(1.2 * (attempt + 1))
+    raise last_exc
 
 
 def get_status_code(result: dict):

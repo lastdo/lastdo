@@ -7,7 +7,9 @@ from groq import Groq
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from data_layer.app_common import ensure_analysis_dir, get_runtime_secret
+from data_layer.data_diagnostics import make_failed_diagnostic, make_finmind_diagnostic
 from data_layer.export_utils import CSV_ENCODING, dataframe_to_csv_bytes
+from render_layer.diagnostics import render_data_diagnostics
 
 ANALYSIS_DIR = ensure_analysis_dir()
 
@@ -94,6 +96,10 @@ with st.sidebar:
 FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
 
 
+def _append_data_diagnostic(diagnostic) -> None:
+    st.session_state.setdefault("_data_diagnostics", []).append(diagnostic.to_dict())
+
+
 def _finmind_get(
     dataset: str,
     data_id: str,
@@ -115,9 +121,36 @@ def _finmind_get(
         resp.raise_for_status()
         result = resp.json()
         if result.get("status") != 200 or not result.get("data"):
+            _append_data_diagnostic(
+                make_finmind_diagnostic(
+                    f"FinMind {dataset}",
+                    result.get("status"),
+                    str(result.get("msg") or result.get("message") or result.get("error") or ""),
+                    records=0,
+                    retry_after=result.get("retry_after"),
+                    sample_ids=[data_id],
+                )
+            )
             return pd.DataFrame()
+        _append_data_diagnostic(
+            make_finmind_diagnostic(
+                f"FinMind {dataset}",
+                200,
+                "",
+                records=len(result["data"]),
+                sample_ids=[data_id],
+            )
+        )
         return pd.DataFrame(result["data"])
     except Exception as e:
+        _append_data_diagnostic(
+            make_failed_diagnostic(
+                f"FinMind {dataset}",
+                "FinMind 請求失敗，相關區塊資料不可視為完整。",
+                detail=f"{type(e).__name__}: {e}",
+                sample_ids=[data_id],
+            )
+        )
         st.error(f"❌ FinMind API 請求失敗：{e}")
         return pd.DataFrame()
 
@@ -189,11 +222,36 @@ def get_stock_name(symbol: str, token: str = "") -> str:
         resp = requests.get(FINMIND_URL, params=params, timeout=15)
         result = resp.json()
         if result.get("status") == 200 and result.get("data"):
+            _append_data_diagnostic(
+                make_finmind_diagnostic(
+                    "FinMind TaiwanStockInfo",
+                    200,
+                    "",
+                    records=len(result["data"]),
+                    sample_ids=[symbol],
+                )
+            )
             info_df = pd.DataFrame(result["data"])
             row = info_df[info_df["stock_id"] == symbol]
             if not row.empty:
                 return str(row.iloc[0].get("stock_name", symbol))
+        _append_data_diagnostic(
+            make_finmind_diagnostic(
+                "FinMind TaiwanStockInfo",
+                result.get("status"),
+                str(result.get("msg") or result.get("message") or result.get("error") or ""),
+                records=0,
+                sample_ids=[symbol],
+            )
+        )
     except Exception:
+        _append_data_diagnostic(
+            make_failed_diagnostic(
+                "FinMind TaiwanStockInfo",
+                "股票基本資訊抓取失敗，已用股票代碼作為名稱。",
+                sample_ids=[symbol],
+            )
+        )
         pass
     return symbol
 
@@ -474,8 +532,24 @@ def get_stock_news(symbol: str, stock_name: str, max_items: int = 15) -> list:
             news_list.append({"date": date_str, "title": title})
             if len(news_list) >= max_items:
                 break
-    except Exception:
-        pass
+        _append_data_diagnostic(
+            make_finmind_diagnostic(
+                "Google News RSS",
+                200,
+                "",
+                records=len(news_list),
+                sample_ids=[symbol],
+            )
+        )
+    except Exception as exc:
+        _append_data_diagnostic(
+            make_failed_diagnostic(
+                "Google News RSS",
+                "新聞抓取失敗，AI 新聞段落不可視為即時完整。",
+                detail=f"{type(exc).__name__}: {exc}",
+                sample_ids=[symbol],
+            )
+        )
     return news_list
 
 
@@ -788,6 +862,7 @@ def generate_ai_insights(
 # 主程式邏輯
 # ─────────────────────────────────────────────
 if analyze_btn:
+    st.session_state["_data_diagnostics"] = []
 
     # ── F-008 輸入驗證 ──────────────────────────
     if not symbol_input:
@@ -867,6 +942,7 @@ if analyze_btn:
         "start_date": start_date, "end_date": end_date,
         "groq_api_key": groq_api_key,
         "taiex_change": taiex_change,
+        "data_diagnostics": st.session_state.get("_data_diagnostics", []),
     }
     st.session_state.pop("_ai_report", None)
     st.session_state.pop("_news_data", None)
@@ -890,6 +966,7 @@ if "_cache" in st.session_state:
     end_date             = _c["end_date"]
     groq_api_key         = _c["groq_api_key"]
     taiex_change         = _c.get("taiex_change", None)
+    data_diagnostics     = _c.get("data_diagnostics", st.session_state.get("_data_diagnostics", []))
 
     tab1, tab2 = st.tabs(["📊 技術面總覽", "🤖 AI 綜合分析"])
 
@@ -901,6 +978,7 @@ if "_cache" in st.session_state:
         # ── F-004 K 線圖與技術指標 ───────────────────
         st.subheader(f"📊 {symbol_input} {stock_name} 股價K線圖與技術指標")
         st.caption(f"分析期間：{start_date} ～ {end_date}　｜　資料來源：FinMind（免費版）")
+        render_data_diagnostics(data_diagnostics)
 
         fig = make_subplots(
             rows=2, cols=1,
@@ -1327,10 +1405,12 @@ if "_cache" in st.session_state:
         if "_ai_report" not in st.session_state:
             with st.spinner("正在抓取近一年即時新聞（Google News）..."):
                 news_data = get_stock_news(symbol_input, stock_name)
+            st.session_state["_cache"]["data_diagnostics"] = st.session_state.get("_data_diagnostics", [])
             if news_data:
                 st.caption(f"📰 已抓取 {len(news_data)} 則近一年新聞供 AI 參考")
             else:
                 st.caption("⚠️ 新聞抓取失敗，AI 將依訓練資料分析")
+            render_data_diagnostics(st.session_state.get("_data_diagnostics", []))
 
             with st.spinner("AI 正在分析台股數據，請稍候（約 10-20 秒）..."):
                 ai_report = generate_ai_insights(

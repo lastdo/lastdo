@@ -1,6 +1,7 @@
 import pandas as pd
 import streamlit as st
 
+from data_layer.data_diagnostics import fetch_json_with_diagnostic
 from data_layer.market_data import build_public_pe_snapshot
 from data_layer.market_api import fetch_json_tpex, fetch_json_twse
 
@@ -24,6 +25,30 @@ def fetch_public_pe_ratios() -> pd.DataFrame:
         raw_tpex = []
 
     return build_public_pe_snapshot(raw_twse, raw_tpex)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_public_pe_ratios_with_diagnostics() -> tuple[pd.DataFrame, list[dict]]:
+    """Fetch official PE ratios with per-source diagnostics."""
+    raw_twse, diag_twse = fetch_json_with_diagnostic(
+        fetch_json_twse,
+        URL_TWSE_PE,
+        "TWSE 官方本益比",
+    )
+    raw_tpex, diag_tpex = fetch_json_with_diagnostic(
+        fetch_json_tpex,
+        URL_TPEX_PE,
+        "TPEX 官方本益比",
+    )
+
+    df = build_public_pe_snapshot(raw_twse, raw_tpex)
+    diagnostics = [diag_twse.to_dict(), diag_tpex.to_dict()]
+    if df.empty:
+        for item in diagnostics:
+            if item["status"] == "complete":
+                item["status"] = "partial"
+                item["message"] = "來源有回應，但可用本益比資料為空，欄位可能異動。"
+    return df, diagnostics
 
 
 def attach_public_valuation(
