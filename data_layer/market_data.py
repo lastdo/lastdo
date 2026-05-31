@@ -1,5 +1,16 @@
 import pandas as pd
 
+from data_layer.contracts import (
+    INSTITUTIONAL_NET_BUY_CONTRACT,
+    PRICE_SNAPSHOT_CONTRACT,
+    PUBLIC_PE_CONTRACT,
+    RECENT_REVENUE_METRICS_CONTRACT,
+    REVENUE_SNAPSHOT_CONTRACT,
+    empty_contract_frame,
+    ensure_dataframe_contract,
+    select_contract_columns,
+)
+
 
 PUBLIC_PE_TWSE_COLUMNS = {
     "Code": "stock_id",
@@ -67,7 +78,7 @@ def build_price_snapshot(raw_twse_price: list, raw_tpex_price: list) -> pd.DataF
         frames.append(df_tpex)
 
     if not frames:
-        return pd.DataFrame(columns=["stock_id", "stock_name", "market", "close", "vol_lot"])
+        return empty_contract_frame(PRICE_SNAPSHOT_CONTRACT)
 
     df_price = pd.concat(frames, ignore_index=True)
     df_price["stock_id"] = df_price["stock_id"].astype(str).str.strip()
@@ -75,7 +86,8 @@ def build_price_snapshot(raw_twse_price: list, raw_tpex_price: list) -> pd.DataF
     df_price["close"] = clean_numeric(df_price["close"])
     df_price["vol_shares"] = clean_numeric(df_price["vol_shares"])
     df_price["vol_lot"] = df_price["vol_shares"] / 1000
-    return df_price[["stock_id", "stock_name", "market", "close", "vol_lot"]].dropna()
+    df_price = df_price.dropna(subset=list(PRICE_SNAPSHOT_CONTRACT.required))
+    return select_contract_columns(df_price, PRICE_SNAPSHOT_CONTRACT)
 
 
 def build_revenue_snapshot(raw_twse_rev: list, raw_tpex_rev: list) -> pd.DataFrame:
@@ -90,7 +102,7 @@ def build_revenue_snapshot(raw_twse_rev: list, raw_tpex_rev: list) -> pd.DataFra
         frames.append(df_tpex)
 
     if not frames:
-        return pd.DataFrame(columns=list(REVENUE_COLUMNS.values()))
+        return empty_contract_frame(REVENUE_SNAPSHOT_CONTRACT)
 
     df_rev = pd.concat(frames, ignore_index=True)
     df_rev["stock_id"] = df_rev["stock_id"].astype(str).str.strip()
@@ -98,7 +110,8 @@ def build_revenue_snapshot(raw_twse_rev: list, raw_tpex_rev: list) -> pd.DataFra
     df_rev["rev_yoy"] = clean_numeric(df_rev["rev_yoy"])
     df_rev["rev_cur"] = clean_numeric(df_rev["rev_cur"])
     df_rev["rev_ly"] = clean_numeric(df_rev["rev_ly"])
-    return df_rev.dropna(subset=["rev_yoy"])
+    df_rev = df_rev.dropna(subset=["rev_yoy"])
+    return select_contract_columns(df_rev, REVENUE_SNAPSHOT_CONTRACT)
 
 
 def build_public_pe_snapshot(raw_twse_pe: list, raw_tpex_pe: list) -> pd.DataFrame:
@@ -123,13 +136,14 @@ def build_public_pe_snapshot(raw_twse_pe: list, raw_tpex_pe: list) -> pd.DataFra
         )
 
     if not frames:
-        return pd.DataFrame(columns=["stock_id", "pe_ratio_public"])
+        return empty_contract_frame(PUBLIC_PE_CONTRACT)
 
     df = pd.concat(frames, ignore_index=True)
     df["stock_id"] = df["stock_id"].astype(str).str.strip()
     df["pe_ratio_public"] = clean_numeric(df["pe_ratio_public"])
     df.loc[df["pe_ratio_public"] <= 0, "pe_ratio_public"] = pd.NA
-    return df.drop_duplicates("stock_id")
+    df = df.drop_duplicates("stock_id")
+    return select_contract_columns(df, PUBLIC_PE_CONTRACT)
 
 
 def build_institutional_net_buy_frame(
@@ -141,12 +155,13 @@ def build_institutional_net_buy_frame(
     if secondary_net_shares is not None:
         net = net + clean_numeric(pd.Series(secondary_net_shares)).fillna(0)
 
-    return pd.DataFrame(
+    df = pd.DataFrame(
         {
             "stock_id": pd.Series(stock_ids).astype(str).str.strip(),
             "foreign_net_shares": net,
         }
     )
+    return select_contract_columns(df, INSTITUTIONAL_NET_BUY_CONTRACT)
 
 
 def prev_roc_month(ym_str: str) -> str:
@@ -177,6 +192,9 @@ def latest_revenue_month(df_rev: pd.DataFrame) -> str:
 
 
 def build_latest_revenue_view(df_rev: pd.DataFrame) -> pd.DataFrame:
+    ensure_dataframe_contract(df_rev, REVENUE_SNAPSHOT_CONTRACT)
+    if df_rev.empty:
+        return empty_contract_frame(REVENUE_SNAPSHOT_CONTRACT)
     return (
         df_rev.sort_values(["stock_id", "rev_ym"], ascending=[True, False])
         .groupby("stock_id", as_index=False)
@@ -185,6 +203,10 @@ def build_latest_revenue_view(df_rev: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_recent_revenue_metrics(df_rev: pd.DataFrame, months: int = 2) -> pd.DataFrame:
+    ensure_dataframe_contract(df_rev, REVENUE_SNAPSHOT_CONTRACT)
+    if df_rev.empty:
+        return empty_contract_frame(RECENT_REVENUE_METRICS_CONTRACT)
+
     df_sorted = df_rev.sort_values(["stock_id", "rev_ym"], ascending=[True, False])
     df_top = df_sorted.groupby("stock_id").head(months)
 
@@ -203,4 +225,5 @@ def build_recent_revenue_metrics(df_rev: pd.DataFrame, months: int = 2) -> pd.Da
     )
 
     merged = df_latest.merge(df_avg, on="stock_id", how="left")
-    return merged.merge(df_recent, on="stock_id", how="left")
+    merged = merged.merge(df_recent, on="stock_id", how="left")
+    return select_contract_columns(merged, RECENT_REVENUE_METRICS_CONTRACT)

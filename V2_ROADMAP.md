@@ -1,170 +1,170 @@
-# V2 Roadmap
+# V2 路線圖
 
-## Current Assessment
+## 目前狀態判斷
 
-The current system is a mature `v1` rather than a temporary prototype.
+目前這套系統比較像是成熟的 `v1`，而不是臨時拼出來的原型。
 
-What is already working well:
+已經做得不錯的地方：
 
-- The product has a clear main workflow: screening, analysis, history, and portfolio/watchlist management.
-- The UI already has recognizable product structure instead of looking like a loose collection of pages.
-- The shared code has started to separate into `data_layer` and `render_layer`, which is a healthy direction.
-- Core Taiwan stock data integrations are already useful in real usage.
+- 產品主線很清楚：選股、分析、歷史記錄、庫存／自選股管理都有串起來。
+- 介面已經有明顯的產品感，不再只是幾個零散頁面的集合。
+- 共用程式開始拆成 `data_layer` 與 `render_layer`，方向是健康的。
+- 台股資料整合已經具備真實使用價值。
 
-What keeps it from being a fully mature long-term system:
+目前還不能算是長期成熟系統的原因：
 
-- External data reliability is still a major dependency risk.
-- Core module contracts are not yet strict enough.
-- Regression safety mainly depends on manual checking.
-- Some page files still carry too much orchestration and display preparation logic.
+- 對外部資料源的穩定性依賴還是偏高。
+- 核心模組之間的契約還不夠嚴謹。
+- 回歸安全性目前主要還是依賴人工驗證。
+- 某些頁面檔案仍然承擔太多資料整理與畫面組裝邏輯。
 
-In short:
+一句話來說：
 
-`v1` is already solid enough to be considered a serious working product.
-`v2` should focus on reliability, maintainability, and workflow depth rather than only adding more features.
+`v1` 已經足夠算是一個認真可用的產品。
+`v2` 的重點不應該只是繼續加功能，而是讓系統更可靠、更好維護、也更容易擴充。
 
-## V2 Priorities
+## V2 核心優先項
 
-### 1. Data Reliability and Observability
+### 1. 資料可靠性與可觀測性
 
-Goal:
-Make the system honest and resilient when upstream data is incomplete, delayed, rate-limited, or structurally changed.
+目標：
+讓系統在上游資料不完整、延遲、被限流、或欄位變動時，仍然能誠實而穩定地反映狀態。
 
-Work items:
+工作項目：
 
-- Add clearer status reporting for TWSE, TPEX, FinMind, and news fetches.
-- Distinguish between complete data, partial data, stale cache, and failed fetch.
-- Add stronger retry and fallback handling where appropriate.
-- Show page-level health hints when a result is incomplete rather than silently degrading.
-- Centralize source diagnostics so each page does not invent its own warning style.
+- 補上更清楚的 TWSE、TPEX、FinMind、新聞抓取狀態提示。
+- 明確區分完整資料、部分資料、舊快取與抓取失敗。
+- 對適合的資料來源加強 retry 與 fallback 策略。
+- 當頁面結果不完整時，直接顯示頁面層級診斷，而不是默默降級。
+- 把資料來源診斷收斂成統一方式，不讓每頁各自發明警告格式。
 
-Why this matters:
+為什麼重要：
 
-This is the biggest current product risk. A stock app becomes hard to trust if users cannot tell whether the data is truly current and complete.
+這是目前最大的產品風險。股票系統一旦讓人分不清楚資料是否真的完整、是否真的最新，信任度就會快速下降。
 
-### 2. Data Layer Contracts
+### 2. 資料層契約固定化
 
-Goal:
-Make `data_layer` predictable enough that future page changes do not break from hidden assumptions.
+目標：
+讓 `data_layer` 的行為更可預測，避免未來頁面調整時因隱性假設而互相牽動。
 
-Work items:
+工作項目：
 
-- Standardize return schemas for shared helpers.
-- Document required and optional fields for key outputs.
-- Normalize naming for repeated concepts such as `stock_id`, `latest_price`, `price_date`, `vol_lot`, `unrealized_pnl`.
-- Reduce page-specific assumptions about raw helper outputs.
-- Add a lightweight convention document for shared data contracts.
+- 標準化 shared helper 的回傳 schema。
+- 文件化關鍵輸出的必要欄位與可選欄位。
+- 統一常見欄位命名，例如 `stock_id`、`latest_price`、`price_date`、`vol_lot`、`unrealized_pnl`。
+- 減少頁面直接依賴 helper 的隱性欄位假設。
+- 補一份輕量的 shared data contract 說明文件。
 
-Why this matters:
+為什麼重要：
 
-The current reorganization into `data_layer` is the right start. The next maturity step is making those modules reliable contracts, not just relocated files.
+現在把共用程式整理進 `data_layer` 是很好的第一步；下一步是讓這些模組不只是搬家，而是真的成為穩定契約。
 
-### 3. Test Coverage for Core Flows
+### 3. 核心流程測試覆蓋
 
-Goal:
-Protect the most important business logic from regressions.
+目標：
+把最重要的商業邏輯保護起來，降低未來改功能時的回歸風險。
 
-Recommended first tests:
+建議優先補的測試：
 
-- Market data parsing tests for TWSE and TPEX payloads.
-- Portfolio load/update/delete behavior tests.
-- Family ID filtering tests.
-- Inventory table preparation tests.
-- Edge case tests for missing prices, missing fields, empty datasets, and rate-limit responses.
+- TWSE / TPEX 市場資料解析測試
+- portfolio 載入、更新、刪除行為測試
+- family_id 篩選行為測試
+- inventory 表格資料整理測試
+- 缺價、缺欄位、空資料、限流等 edge case 測試
 
-Why this matters:
+為什麼重要：
 
-Right now most confidence still comes from manual validation. That works for a while, but `v2` needs a safer base if features keep growing.
+目前大部分信心還是來自人工驗證。前期這樣合理，但 `v2` 若要持續長大，就需要更穩的保護網。
 
-### 4. Page Logic Simplification
+### 4. 頁面邏輯持續瘦身
 
-Goal:
-Reduce the amount of mixed concerns inside large Streamlit pages.
+目標：
+降低大型 Streamlit page 裡「資料整理、狀態控制、畫面組裝」混在一起的程度。
 
-Work items:
+工作項目：
 
-- Move table-preparation logic out of page files where practical.
-- Move repeated “result summary / diagnostics / empty state” assembly into shared render patterns.
-- Keep pages focused on orchestration and user interaction.
-- Continue tightening the line between `data_layer` and `render_layer`.
+- 能拆的表格準備邏輯，逐步從 page 檔移出去。
+- 重複的摘要／診斷／空狀態組裝，持續往 shared render pattern 收斂。
+- 讓 page 主要負責 orchestration 和使用者互動。
+- 繼續拉清 `data_layer` 與 `render_layer` 的邊界。
 
-Why this matters:
+為什麼重要：
 
-Several pages are already feature-rich. Without continued simplification, future changes will become slower and riskier.
+現在幾個主要頁面功能都已經很豐富，若不持續瘦身，後面每次改動的成本與風險都會上升。
 
-### 5. Mobile Experience
+### 5. 手機版體驗
 
-Goal:
-Make the product genuinely usable on smaller screens rather than merely viewable.
+目標：
+讓系統在手機上不只是「看得到」，而是真的「用得順」。
 
-Key targets:
+主要目標：
 
-- Sidebar ergonomics
-- Summary card stacking
-- Table overflow behavior
-- Action area readability
-- Screen hierarchy and spacing on phone widths
+- sidebar 操作手感
+- 摘要卡堆疊方式
+- 表格溢位與閱讀方式
+- 操作區可讀性
+- 小螢幕下的資訊層級與留白
 
-Why this matters:
+為什麼重要：
 
-This is the most visible UX gap left in the current product.
+這是目前最明顯的體驗缺口之一。
 
-### 6. Workflow Integration
+### 6. 工作流整合
 
-Goal:
-Turn the app from “several strong tools” into one connected operating flow.
+目標：
+讓系統從「幾個功能不錯的工具」進一步變成「一套連續可用的流程」。
 
-Work items:
+工作項目：
 
-- Better handoff from screener results to analysis pages.
-- Better handoff from analysis pages to watchlist / holdings.
-- Make analysis history more visible from watchlist and holdings.
-- Improve “what should I review next?” entry points inside the inventory dashboard.
+- 選股結果更順地切到分析頁
+- 分析頁更順地回到自選股／持股
+- 分析記錄和自選股／持股更深整合
+- 補強「今天我先該看什麼」這種入口
 
-Why this matters:
+為什麼重要：
 
-This is where product maturity starts to feel substantial to end users, not just technically improved.
+真正的產品成熟感，很多時候不是來自單點功能，而是來自工作流閉環。
 
-## Suggested Delivery Phases
+## 建議交付階段
 
-### Short Term
+### 短期
 
-- Data fetch diagnostics
-- Core parsing and portfolio tests
-- Mobile fixes for the inventory page
-- Small page logic extractions where risk is low
+- 資料抓取診斷
+- 核心解析與 portfolio 測試
+- inventory 頁手機版調整
+- 低風險的 page logic 抽離
 
-### Mid Term
+### 中期
 
-- Stronger data contracts across `data_layer`
-- Shared result and diagnostics rendering patterns
-- Workflow links between screeners, analysis, and inventory
-- Expanded tests for key pages
+- `data_layer` 契約再固定化
+- 統一結果區與診斷區渲染 pattern
+- 選股、分析、庫存之間的工作流串接
+- 核心頁面測試擴充
 
-### Long Term
+### 長期
 
-- Broader consistency across all pages
-- More advanced portfolio insight views
-- Better system health / admin visibility
-- Larger product-level expansion after the foundation is stable
+- 全頁面更高一致性
+- 更進階的投組洞察視圖
+- 更完整的系統健康／設定檢查
+- 在基礎穩定後再擴大產品功能
 
-## Recommended V2 Order
+## 建議的 V2 執行順序
 
-1. Data reliability and diagnostics
-2. Core tests
-3. Data layer contract cleanup
-4. Mobile optimization
-5. Workflow integration
+1. 資料可靠性與診斷
+2. 核心測試
+3. 資料層契約整理
+4. 手機版優化
+5. 工作流整合
 
-## Final Direction
+## 最終方向
 
-`v2` should not try to become “more impressive” first.
+`v2` 不應該優先追求看起來更炫或功能更多。
 
-It should become:
+它應該先變成：
 
-- more trustworthy
-- easier to maintain
-- safer to extend
-- more coherent as one product
+- 更可信
+- 更好維護
+- 更安全地擴充
+- 更像同一個完整產品
 
-That is the path from a strong `v1` into a genuinely durable system.
+這條路，才是從一個很強的 `v1`，走向真正耐久系統的方式。

@@ -7,6 +7,7 @@ from typing import Any
 import streamlit as st
 
 from data_layer.app_common import get_portfolio_file
+from data_layer.contracts import PORTFOLIO_ITEM_FIELDS
 
 try:
     import gspread
@@ -101,7 +102,7 @@ def normalize_portfolio_item(item: dict[str, Any], family_id: str = "") -> dict[
     stock_id = str(item.get("stock_id") or item.get("symbol") or "").strip()
     stock_name = str(item.get("stock_name") or item.get("name") or "").strip()
     note = str(item.get("note") or "").strip()
-    return {
+    normalized = {
         "row_id": str(item.get("row_id") or uuid.uuid4().hex),
         "family_id": str(item.get("family_id") or family_id or "").strip(),
         "symbol": stock_id,
@@ -116,6 +117,7 @@ def normalize_portfolio_item(item: dict[str, Any], family_id: str = "") -> dict[
         "updated_at": str(item.get("updated_at") or _utc_now()),
         "is_deleted": _is_truthy(item.get("is_deleted")),
     }
+    return {field: normalized[field] for field in PORTFOLIO_ITEM_FIELDS}
 
 
 def get_default_family_id() -> str:
@@ -340,7 +342,7 @@ def load_portfolio(family_id: str) -> list[dict[str, Any]]:
         normalized_items.append(normalized)
         if normalized["family_id"] != item.get("family_id", "").strip():
             updated = True
-        if not normalized["is_deleted"]:
+        if normalized["family_id"] == family_id and not normalized["is_deleted"]:
             rows.append(normalized)
 
     if updated:

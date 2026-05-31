@@ -1,6 +1,11 @@
 import pandas as pd
 import streamlit as st
 
+from data_layer.contracts import (
+    PUBLIC_PE_CONTRACT,
+    PUBLIC_VALUATION_CONTRACT,
+    ensure_dataframe_contract,
+)
 from data_layer.data_diagnostics import fetch_json_with_diagnostic
 from data_layer.market_data import build_public_pe_snapshot
 from data_layer.market_api import fetch_json_tpex, fetch_json_twse
@@ -57,6 +62,14 @@ def attach_public_valuation(
     price_col: str = "close",
 ) -> pd.DataFrame:
     """Attach official PE and reverse-computed trailing-4Q EPS to a stock dataframe."""
+    ensure_dataframe_contract(df_public_pe, PUBLIC_PE_CONTRACT)
+    missing_input_columns = [column for column in ("stock_id", price_col) if column not in df.columns]
+    if missing_input_columns:
+        raise ValueError(
+            "public_valuation input missing required columns: "
+            + ", ".join(missing_input_columns)
+        )
+
     merged = df.merge(df_public_pe, on="stock_id", how="left")
     merged["pe_ratio"] = pd.to_numeric(merged["pe_ratio_public"], errors="coerce")
     merged["ttm_eps"] = pd.NA
@@ -71,4 +84,5 @@ def attach_public_valuation(
 
     merged["pe_label"] = pd.NA
     merged.loc[valid_mask, "pe_label"] = PUBLIC_PE_LABEL
+    ensure_dataframe_contract(merged, PUBLIC_VALUATION_CONTRACT)
     return merged
