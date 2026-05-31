@@ -188,6 +188,100 @@ st.markdown("""
 .stat-value.pos { color: var(--accent-risk); }
 .stat-value.neg { color: var(--accent-positive); }
 
+.today-dashboard {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: 14px;
+    padding: 18px 20px;
+    box-shadow: var(--shadow-soft);
+    margin: 18px 0 16px;
+}
+.today-dashboard-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 14px;
+    margin-bottom: 14px;
+}
+.today-dashboard-title {
+    color: var(--text-primary);
+    font-size: 1.08rem;
+    font-weight: 900;
+    line-height: 1.3;
+}
+.today-dashboard-sub {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    margin-top: 3px;
+}
+.today-dashboard-date {
+    color: var(--text-muted);
+    font-size: 0.76rem;
+    font-weight: 800;
+    white-space: nowrap;
+}
+.today-dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+}
+.today-dashboard-tile {
+    background: #f8fbff;
+    border: 1px solid #e4edf8;
+    border-radius: 10px;
+    padding: 12px 14px;
+    min-width: 0;
+}
+.today-dashboard-label {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-bottom: 6px;
+}
+.today-dashboard-value {
+    color: var(--text-primary);
+    font-size: 1rem;
+    font-weight: 900;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+.today-dashboard-value.pos { color: var(--accent-risk); }
+.today-dashboard-value.neg { color: var(--accent-positive); }
+.today-dashboard-note {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    line-height: 1.45;
+    margin-top: 5px;
+}
+.today-dashboard-actions {
+    margin-top: 12px;
+}
+.today-dashboard-alerts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+}
+.today-dashboard-alert {
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    border: 1px solid;
+}
+.today-dashboard-alert.warn {
+    background: #fff8eb;
+    border-color: #f3c36d;
+    color: #7a4a00;
+}
+.today-dashboard-alert.ok {
+    background: #effaf3;
+    border-color: #a9dfbf;
+    color: #14623b;
+}
+
 /* ── 新增表單標題 ── */
 /* ── 表單容器美化 ── */
 /* ── 清單標題列 ── */
@@ -239,6 +333,35 @@ st.markdown("""
     .inv-header p { font-size: 0.77rem; line-height: 1.45; }
     .stat-card { padding: 14px 14px; }
     .stat-value { font-size: 1.2rem; }
+    .today-dashboard {
+        padding: 14px;
+        margin: 14px 0;
+    }
+    .today-dashboard-head {
+        display: block;
+    }
+    .today-dashboard-date {
+        margin-top: 4px;
+        white-space: normal;
+    }
+    .today-dashboard-grid,
+    .today-dashboard-alerts {
+        grid-template-columns: 1fr;
+    }
+    .today-dashboard-title {
+        font-size: 1rem;
+    }
+    .today-dashboard-sub,
+    .today-dashboard-note,
+    .today-dashboard-alert {
+        font-size: 0.76rem;
+    }
+    .today-dashboard-tile {
+        padding: 11px 12px;
+    }
+    .today-dashboard-value {
+        font-size: 0.98rem;
+    }
     .sym-badge {
         font-size: 0.96rem;
         padding: 3px 9px;
@@ -397,6 +520,171 @@ def _escape_html(value) -> str:
 
 def _mobile_value_class(value) -> str:
     return pnl_class(value)
+
+
+def _dashboard_stock_label(row: pd.Series | None) -> str:
+    if row is None:
+        return "—"
+    symbol = str(row.get("symbol", "")).strip()
+    name = str(row.get("name", "") or "").strip()
+    if symbol and name:
+        return f"{symbol} {name}"
+    return symbol or name or "—"
+
+
+def _dashboard_tile(label: str, value: str, note: str = "", value_class: str = "") -> str:
+    return f"""
+<div class="today-dashboard-tile">
+  <div class="today-dashboard-label">{_escape_html(label)}</div>
+  <div class="today-dashboard-value {_escape_html(value_class)}">{_escape_html(value)}</div>
+  <div class="today-dashboard-note">{_escape_html(note)}</div>
+</div>"""
+
+
+def render_today_investment_dashboard(
+    holding_df: pd.DataFrame,
+    watch_df: pd.DataFrame,
+    latest_price_date: str,
+    priced_holding_count: int,
+    holding_count: int,
+    price_coverage_pct: float,
+    total_market: float,
+    today_pnl,
+    unrealized_pnl,
+) -> None:
+    if holding_df.empty and watch_df.empty:
+        st.markdown(
+            """
+<div class="today-dashboard">
+  <div class="today-dashboard-head">
+    <div>
+      <div class="today-dashboard-title">今日投資儀表板</div>
+      <div class="today-dashboard-sub">尚未建立持股或自選股，加入股票後會自動整理今日重點。</div>
+    </div>
+  </div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+        return
+
+    priced_holdings = holding_df.dropna(subset=["latest_price"]).copy() if not holding_df.empty else pd.DataFrame()
+    today_holdings = holding_df.dropna(subset=["today_pnl"]).copy() if not holding_df.empty else pd.DataFrame()
+    watch_movers = watch_df.dropna(subset=["today_return"]).copy() if not watch_df.empty else pd.DataFrame()
+
+    top_position = None
+    if not priced_holdings.empty and priced_holdings["market_value"].notna().any():
+        top_position = priced_holdings.sort_values("market_value", ascending=False).iloc[0]
+    best_today = today_holdings.sort_values("today_pnl", ascending=False).iloc[0] if not today_holdings.empty else None
+    worst_today = today_holdings.sort_values("today_pnl", ascending=True).iloc[0] if not today_holdings.empty else None
+    top_watch = watch_movers.sort_values("today_return", ascending=False).iloc[0] if not watch_movers.empty else None
+
+    today_note = "持股今日估算損益"
+    if today_holdings.empty:
+        today_note = "等待最新價與前收資料"
+
+    top_position_note = "尚無可計算市值"
+    top_position_value = "—"
+    if top_position is not None:
+        top_position_value = _dashboard_stock_label(top_position)
+        top_position_note = (
+            f"{format_money(top_position.get('market_value'))}，"
+            f"占比 {top_position.get('position_ratio'):.1f}%"
+            if pd.notna(top_position.get("position_ratio"))
+            else format_money(top_position.get("market_value"))
+        )
+
+    best_note = "尚無今日漲跌資料"
+    best_value = "—"
+    best_class = ""
+    if best_today is not None:
+        best_value = _dashboard_stock_label(best_today)
+        best_note = f"{format_signed_money(best_today.get('today_pnl'))} / {format_pct(best_today.get('today_return'))}"
+        best_class = pnl_class(best_today.get("today_pnl"))
+
+    worst_note = "尚無今日漲跌資料"
+    worst_value = "—"
+    worst_class = ""
+    if worst_today is not None:
+        worst_value = _dashboard_stock_label(worst_today)
+        worst_note = f"{format_signed_money(worst_today.get('today_pnl'))} / {format_pct(worst_today.get('today_return'))}"
+        worst_class = pnl_class(worst_today.get("today_pnl"))
+
+    watch_note = "自選股尚無今日漲跌資料"
+    watch_value = "—"
+    watch_class = ""
+    if top_watch is not None:
+        watch_value = _dashboard_stock_label(top_watch)
+        watch_note = f"今日漲跌幅 {format_pct(top_watch.get('today_return'))}"
+        watch_class = pnl_class(top_watch.get("today_return"))
+
+    tiles = [
+        _dashboard_tile("今日損益", format_signed_money(today_pnl), today_note, pnl_class(today_pnl)),
+        _dashboard_tile("最大持倉", top_position_value, top_position_note),
+        _dashboard_tile("今日最強持股", best_value, best_note, best_class),
+        _dashboard_tile("今日最弱持股", worst_value, worst_note, worst_class),
+        _dashboard_tile("自選股強勢", watch_value, watch_note, watch_class),
+        _dashboard_tile("價格覆蓋", f"{priced_holding_count}/{holding_count}", f"{price_coverage_pct:.0f}% 持股有最新價"),
+        _dashboard_tile("未實現損益", format_signed_money(unrealized_pnl), "扣除預估賣出成本後"),
+        _dashboard_tile("目前總市值", format_money(total_market), f"{len(priced_holdings)} 檔可計算市值"),
+    ]
+
+    alerts = []
+    if price_coverage_pct < 99 and holding_count:
+        alerts.append(("warn", f"有 {holding_count - priced_holding_count} 檔持股缺最新價，今日損益與市值可能不完整。"))
+    if top_position is not None and pd.notna(top_position.get("position_ratio")) and top_position.get("position_ratio") >= 40:
+        alerts.append(("warn", f"{_dashboard_stock_label(top_position)} 占投資組合 {top_position.get('position_ratio'):.1f}%，留意單一持股集中度。"))
+    down_count = int((today_holdings["today_pnl"] < 0).sum()) if not today_holdings.empty else 0
+    if down_count:
+        alerts.append(("warn", f"今日有 {down_count} 檔持股下跌，可用下方快速篩選檢查拖累來源。"))
+    if not alerts:
+        alerts.append(("ok", "今日資料覆蓋完整，持股集中度與下跌檔數未觸發提醒。"))
+
+    alert_html = "".join(
+        f"""<div class="today-dashboard-alert {kind}">{_escape_html(message)}</div>"""
+        for kind, message in alerts[:4]
+    )
+    st.markdown(
+        f"""
+<div class="today-dashboard">
+  <div class="today-dashboard-head">
+    <div>
+      <div class="today-dashboard-title">今日投資儀表板</div>
+      <div class="today-dashboard-sub">把持股損益、價格覆蓋、自選股動能與待處理提醒集中在第一屏。</div>
+    </div>
+    <div class="today-dashboard-date">價格日：{_escape_html(latest_price_date)}</div>
+  </div>
+  <div class="today-dashboard-grid">
+    {''.join(tiles)}
+  </div>
+  <div class="today-dashboard-alerts">
+    {alert_html}
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    action_col1, action_col2, action_col3 = st.columns([1, 1, 2])
+    with action_col1:
+        if st.button("查看今日下跌", use_container_width=True, key="dashboard_filter_down"):
+            st.session_state["inventory_scope_mode"] = "持股"
+            st.session_state["inventory_quick_filter"] = "今日下跌"
+            st.rerun()
+    with action_col2:
+        if st.button("查看缺最新價", use_container_width=True, key="dashboard_filter_missing"):
+            st.session_state["inventory_scope_mode"] = "全部"
+            st.session_state["inventory_quick_filter"] = "缺最新價"
+            st.rerun()
+    with action_col3:
+        if top_position is not None and st.button(
+            f"分析最大持倉 {_dashboard_stock_label(top_position)}",
+            use_container_width=True,
+            type="primary",
+            key="dashboard_analyze_top_position",
+        ):
+            st.session_state["selected_symbol"] = str(top_position.get("symbol", ""))
+            st.switch_page("pages/1_app_tw.py")
 
 
 def render_mobile_holding_cards(df: pd.DataFrame) -> None:
@@ -830,6 +1118,18 @@ render_meta_strip(
             "sub": "庫存頁目前使用的價格日期",
         },
     ]
+)
+
+render_today_investment_dashboard(
+    holding_df=holding_df,
+    watch_df=watch_df,
+    latest_price_date=latest_price_date,
+    priced_holding_count=priced_holding_count,
+    holding_count=holding_count,
+    price_coverage_pct=price_coverage_pct,
+    total_market=total_market,
+    today_pnl=today_pnl,
+    unrealized_pnl=unrealized_pnl,
 )
 
 summary_cards = [
