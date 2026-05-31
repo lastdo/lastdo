@@ -46,14 +46,30 @@ def clean_numeric(series: pd.Series) -> pd.Series:
     )
 
 
+def _select_columns(raw_data: list, column_map: dict[str, str]) -> pd.DataFrame:
+    df = pd.DataFrame(raw_data)
+    if df.empty or not set(column_map).issubset(df.columns):
+        return pd.DataFrame(columns=list(column_map.values()))
+    return df[list(column_map)].rename(columns=column_map)
+
+
 def build_price_snapshot(raw_twse_price: list, raw_tpex_price: list) -> pd.DataFrame:
-    df_twse = pd.DataFrame(raw_twse_price)[list(PRICE_TWSE_COLUMNS)].rename(columns=PRICE_TWSE_COLUMNS)
-    df_twse["market"] = "TWSE"
+    frames = []
 
-    df_tpex = pd.DataFrame(raw_tpex_price)[list(PRICE_TPEX_COLUMNS)].rename(columns=PRICE_TPEX_COLUMNS)
-    df_tpex["market"] = "TPEX"
+    df_twse = _select_columns(raw_twse_price, PRICE_TWSE_COLUMNS)
+    if not df_twse.empty:
+        df_twse["market"] = "TWSE"
+        frames.append(df_twse)
 
-    df_price = pd.concat([df_twse, df_tpex], ignore_index=True)
+    df_tpex = _select_columns(raw_tpex_price, PRICE_TPEX_COLUMNS)
+    if not df_tpex.empty:
+        df_tpex["market"] = "TPEX"
+        frames.append(df_tpex)
+
+    if not frames:
+        return pd.DataFrame(columns=["stock_id", "stock_name", "market", "close", "vol_lot"])
+
+    df_price = pd.concat(frames, ignore_index=True)
     df_price["stock_id"] = df_price["stock_id"].astype(str).str.strip()
     df_price["stock_name"] = df_price["stock_name"].astype(str).str.strip()
     df_price["close"] = clean_numeric(df_price["close"])
@@ -63,10 +79,20 @@ def build_price_snapshot(raw_twse_price: list, raw_tpex_price: list) -> pd.DataF
 
 
 def build_revenue_snapshot(raw_twse_rev: list, raw_tpex_rev: list) -> pd.DataFrame:
-    df_twse = pd.DataFrame(raw_twse_rev).rename(columns=REVENUE_COLUMNS)[list(REVENUE_COLUMNS.values())].copy()
-    df_tpex = pd.DataFrame(raw_tpex_rev).rename(columns=REVENUE_COLUMNS)[list(REVENUE_COLUMNS.values())].copy()
+    frames = []
 
-    df_rev = pd.concat([df_twse, df_tpex], ignore_index=True)
+    df_twse = _select_columns(raw_twse_rev, REVENUE_COLUMNS)
+    if not df_twse.empty:
+        frames.append(df_twse)
+
+    df_tpex = _select_columns(raw_tpex_rev, REVENUE_COLUMNS)
+    if not df_tpex.empty:
+        frames.append(df_tpex)
+
+    if not frames:
+        return pd.DataFrame(columns=list(REVENUE_COLUMNS.values()))
+
+    df_rev = pd.concat(frames, ignore_index=True)
     df_rev["stock_id"] = df_rev["stock_id"].astype(str).str.strip()
     df_rev["rev_ym"] = df_rev["rev_ym"].astype(str).str.strip().str.replace("/", "", regex=False)
     df_rev["rev_yoy"] = clean_numeric(df_rev["rev_yoy"])

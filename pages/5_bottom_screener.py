@@ -6,6 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
+from data_layer.data_diagnostics import fetch_json_with_diagnostic, make_finmind_diagnostic
 from data_layer.finmind_api import (
     fetch_finmind_price_frame,
 )
@@ -13,6 +14,7 @@ from data_layer.market_data import build_latest_revenue_view, build_price_snapsh
 from data_layer.market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
 from data_layer.app_common import get_runtime_secret
 from data_layer.portfolio_store import create_portfolio_item, get_default_family_id, load_portfolio
+from render_layer.diagnostics import render_data_diagnostics
 
 load_dotenv()
 
@@ -565,33 +567,31 @@ def calc_bottom_support(row: pd.Series, history_df: pd.DataFrame):
 # Step 1：抓取最新股價與月營收
 # ─────────────────────────────────────────────
 progress = st.progress(0, text="🚀 準備中...")
+data_diagnostics = []
 
 progress.progress(8, text="📈 取得上市股價（TWSE）...")
-try:
-    raw_twse_price = fetch_json_twse(URL_TWSE_PRICE)
-except Exception as e:
-    st.error(f"❌ 上市股價 API 失敗：{e}")
-    st.stop()
+raw_twse_price, _diag = fetch_json_with_diagnostic(fetch_json_twse, URL_TWSE_PRICE, "TWSE 股價")
+data_diagnostics.append(_diag)
 
 progress.progress(16, text="📈 取得上櫃股價（TPEX）...")
-try:
-    raw_tpex_price = fetch_json_tpex(URL_TPEX_PRICE)
-except Exception as e:
-    st.error(f"❌ 上櫃股價 API 失敗：{e}")
-    st.stop()
+raw_tpex_price, _diag = fetch_json_with_diagnostic(fetch_json_tpex, URL_TPEX_PRICE, "TPEX 股價")
+data_diagnostics.append(_diag)
 
 progress.progress(24, text="💰 取得上市月營收（TWSE）...")
-try:
-    raw_twse_rev = fetch_json_twse(URL_TWSE_REV)
-except Exception as e:
-    st.error(f"❌ 上市月營收 API 失敗：{e}")
-    st.stop()
+raw_twse_rev, _diag = fetch_json_with_diagnostic(fetch_json_twse, URL_TWSE_REV, "TWSE 月營收")
+data_diagnostics.append(_diag)
 
 progress.progress(32, text="💰 取得上櫃月營收（TPEX）...")
-try:
-    raw_tpex_rev = fetch_json_tpex(URL_TPEX_REV)
-except Exception as e:
-    st.error(f"❌ 上櫃月營收 API 失敗：{e}")
+raw_tpex_rev, _diag = fetch_json_with_diagnostic(fetch_json_tpex, URL_TPEX_REV, "TPEX 月營收")
+data_diagnostics.append(_diag)
+
+render_data_diagnostics(data_diagnostics, expanded=any(item.status != "complete" for item in data_diagnostics))
+
+if not raw_twse_price and not raw_tpex_price:
+    st.error("TWSE/TPEX 股價資料都無法取得，本頁無法產生可信選股結果。")
+    st.stop()
+if not raw_twse_rev and not raw_tpex_rev:
+    st.error("TWSE/TPEX 月營收資料都無法取得，本頁無法產生可信選股結果。")
     st.stop()
 
 progress.progress(40, text="🔧 整理股價與月營收資料...")
@@ -720,6 +720,16 @@ with ThreadPoolExecutor(max_workers=3) as executor:
 if _banned_msg and not support_rows:
     _retry_seconds = parse_finmind_retry_seconds(_banned_msg)
     history_bar.progress(1.0, text="❌ FinMind IP 封鎖")
+    data_diagnostics.append(
+        make_finmind_diagnostic(
+            "FinMind 近半年歷史股價",
+            429,
+            _banned_msg,
+            records=0,
+            sample_ids=history_failed[:10],
+        )
+    )
+    render_data_diagnostics(data_diagnostics, expanded=True)
     st.error(
         f"❌ FinMind API 回傳 **IP 暫時封鎖**（ip banned）\n\n"
         f"剩餘等待時間：約 **{format_wait_time(_retry_seconds)}**\n\n"
@@ -734,6 +744,31 @@ if _banned_msg and support_rows:
         f"⚠️ FinMind API 中途被 rate limit，僅完成 {len(support_rows)} / {n_targets} 檔可用歷史股價。"
         f"剩餘等待時間：約 **{format_wait_time(_retry_seconds)}**；"
         f"預估可重新查詢時間：**{format_retry_at(_retry_seconds)}**。"
+    )
+
+if _banned_msg:
+    data_diagnostics.append(
+        make_finmind_diagnostic(
+            "FinMind 近半年歷史股價",
+            429,
+            _banned_msg,
+            records=len(support_rows),
+            sample_ids=history_failed[:10],
+        )
+    )
+elif history_failed:
+    data_diagnostics.append(
+        make_finmind_diagnostic(
+            "FinMind 近半年歷史股價",
+            None,
+            "部分股票歷史股價不足或抓取失敗。",
+            records=len(support_rows),
+            sample_ids=history_failed[:10],
+        )
+    )
+else:
+    data_diagnostics.append(
+        make_finmind_diagnostic("FinMind 近半年歷史股價", 200, "", records=len(support_rows))
     )
 
 history_bar.progress(1.0, text="✅ 歷史股價查詢完成")
@@ -826,6 +861,7 @@ elif view == "明細表":
     render_bottom_table(display_df)
     render_watchlist_adder(df_result, family_id, finmind_token)
 else:
+    render_data_diagnostics(data_diagnostics)
     if _data_date_caption:
         st.caption(_data_date_caption)
     st.write(

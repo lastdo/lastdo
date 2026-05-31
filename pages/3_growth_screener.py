@@ -1,10 +1,12 @@
 import re
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from data_layer.data_diagnostics import fetch_json_with_diagnostic, make_finmind_diagnostic
 from data_layer.app_common import get_runtime_secret
 from data_layer.finmind_api import (
     fetch_finmind_price_frame,
@@ -23,7 +25,8 @@ from data_layer.market_data import (
 )
 from data_layer.market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
 from data_layer.portfolio_store import create_portfolio_item, get_default_family_id, load_portfolio
-from data_layer.public_valuation import attach_public_valuation, fetch_public_pe_ratios
+from data_layer.public_valuation import attach_public_valuation, fetch_public_pe_ratios_with_diagnostics
+from render_layer.diagnostics import render_data_diagnostics
 
 load_dotenv()
 
@@ -560,30 +563,32 @@ def get_finmind_ma60(symbol: str, token: str = "") -> tuple[float | None, int | 
 # Step 1：下載股價與營收原始資料
 # ------------------------------
 progress = st.progress(0, text="開始整理資料...")
+data_diagnostics = []
 
 progress.progress(5, text="正在下載股價資料（TWSE）...")
-try:
-    raw_twse_price = fetch_json_twse(URL_TWSE_PRICE)
-except Exception as e:
-    st.error(f"下載 TWSE 股價資料失敗：{e}"); st.stop()
+raw_twse_price, _diag = fetch_json_with_diagnostic(fetch_json_twse, URL_TWSE_PRICE, "TWSE 股價")
+data_diagnostics.append(_diag)
 
 progress.progress(18, text="正在下載股價資料（TPEX）...")
-try:
-    raw_tpex_price = fetch_json_tpex(URL_TPEX_PRICE)
-except Exception as e:
-    st.error(f"下載 TPEX 股價資料失敗：{e}"); st.stop()
+raw_tpex_price, _diag = fetch_json_with_diagnostic(fetch_json_tpex, URL_TPEX_PRICE, "TPEX 股價")
+data_diagnostics.append(_diag)
 
 progress.progress(35, text="正在下載營收資料（TWSE）...")
-try:
-    raw_twse_rev = fetch_json_twse(URL_TWSE_REV)
-except Exception as e:
-    st.error(f"下載 TWSE 營收資料失敗：{e}"); st.stop()
+raw_twse_rev, _diag = fetch_json_with_diagnostic(fetch_json_twse, URL_TWSE_REV, "TWSE 月營收")
+data_diagnostics.append(_diag)
 
 progress.progress(52, text="正在下載營收資料（TPEX）...")
-try:
-    raw_tpex_rev = fetch_json_tpex(URL_TPEX_REV)
-except Exception as e:
-    st.error(f"下載 TPEX 營收資料失敗：{e}"); st.stop()
+raw_tpex_rev, _diag = fetch_json_with_diagnostic(fetch_json_tpex, URL_TPEX_REV, "TPEX 月營收")
+data_diagnostics.append(_diag)
+
+render_data_diagnostics(data_diagnostics, expanded=any(item.status != "complete" for item in data_diagnostics))
+
+if not raw_twse_price and not raw_tpex_price:
+    st.error("TWSE/TPEX 股價資料都無法取得，本頁無法產生可信選股結果。")
+    st.stop()
+if not raw_twse_rev and not raw_tpex_rev:
+    st.error("TWSE/TPEX 月營收資料都無法取得，本頁無法產生可信選股結果。")
+    st.stop()
 
 progress.progress(65, text="正在整理候選名單...")
 
@@ -647,9 +652,11 @@ if n_candidates == 0:
 
 # 用官方上市櫃本益比建立估值資料。
 progress.progress(71, text="抓取官方上市櫃本益比...")
-df_public_pe = fetch_public_pe_ratios()
+df_public_pe, pe_diagnostics = fetch_public_pe_ratios_with_diagnostics()
+data_diagnostics.extend(pe_diagnostics)
 if df_public_pe.empty:
     progress.progress(100, text="完成")
+    render_data_diagnostics(data_diagnostics, expanded=True)
     st.error("官方上市櫃本益比資料目前抓取失敗，無法套用 PE 條件，請稍後再試。")
     st.stop()
 df_candidates = attach_public_valuation(df_candidates, df_public_pe)
@@ -681,11 +688,56 @@ if df_result.empty:
             )
     st.stop()
 
-progress.progress(94, text=f"查詢季線條件（FinMind，{len(df_result)} 檔）...")
-ma60_results = df_result["stock_id"].apply(lambda sid: get_finmind_ma60(sid, finmind_token))
-df_result["ma60"] = ma60_results.apply(lambda x: x[0])
-df_result["ma60_status"] = ma60_results.apply(lambda x: x[1])
-df_result["ma60_msg"] = ma60_results.apply(lambda x: x[2])
+progress.progress(94, text=f"三線程查詢季線條件（FinMind，0 / {len(df_result)} 檔）...")
+
+
+def fetch_ma60_row(row_data: dict) -> dict:
+    sid = str(row_data["stock_id"])
+    ma60, status_code, msg = get_finmind_ma60(sid, finmind_token)
+    return {
+        "stock_id": sid,
+        "ma60": ma60,
+        "ma60_status": status_code,
+        "ma60_msg": msg,
+    }
+
+
+ma60_rows = []
+ma60_done_count = 0
+ma60_targets = df_result[["stock_id"]].to_dict("records")
+ma60_iter = iter(ma60_targets)
+ma60_pending: dict = {}
+
+with ThreadPoolExecutor(max_workers=3) as executor:
+    for _ in range(min(3, len(ma60_targets))):
+        try:
+            row_data = next(ma60_iter)
+        except StopIteration:
+            break
+        future = executor.submit(fetch_ma60_row, row_data)
+        ma60_pending[future] = str(row_data["stock_id"])
+
+    while ma60_pending:
+        done, _not_done = wait(list(ma60_pending.keys()), return_when=FIRST_COMPLETED)
+
+        for future in done:
+            ma60_pending.pop(future, "")
+            ma60_rows.append(future.result())
+            ma60_done_count += 1
+            progress.progress(
+                94,
+                text=f"三線程查詢季線條件（FinMind，{ma60_done_count} / {len(ma60_targets)} 檔）...",
+            )
+
+            try:
+                row_data = next(ma60_iter)
+            except StopIteration:
+                continue
+            next_future = executor.submit(fetch_ma60_row, row_data)
+            ma60_pending[next_future] = str(row_data["stock_id"])
+
+df_ma60 = pd.DataFrame(ma60_rows)
+df_result = df_result.merge(df_ma60, on="stock_id", how="left")
 df_result["season_line_premium"] = (
     (pd.to_numeric(df_result["close"], errors="coerce") / pd.to_numeric(df_result["ma60"], errors="coerce")) - 1
 )
@@ -695,7 +747,17 @@ if ma60_rate_limited > 0:
     _sample_ma60 = df_result[df_result["ma60_status"].isin([402, 403, 429])][
         ["stock_id", "stock_name", "ma60_status", "ma60_msg"]
     ].head(10)
+    data_diagnostics.append(
+        make_finmind_diagnostic(
+            "FinMind MA60",
+            429,
+            "部分股票 MA60 查詢觸發限流。",
+            records=len(df_result) - ma60_rate_limited,
+            sample_ids=_sample_ma60["stock_id"].tolist(),
+        )
+    )
     progress.progress(100, text="FinMind 季線查詢受限")
+    render_data_diagnostics(data_diagnostics, expanded=True)
     st.error(
         f"FinMind 季線資料查詢受限：基本面通過後剩 {len(df_result)} 檔，"
         f"但仍有 {ma60_rate_limited} 檔在查 MA60 時收到 402/403/429。"
@@ -705,6 +767,20 @@ if ma60_rate_limited > 0:
         with st.expander("查看部分受限股票", expanded=False):
             st.dataframe(_sample_ma60, use_container_width=True, hide_index=True)
     st.stop()
+
+ma60_missing = int(df_result["ma60"].isna().sum())
+if ma60_missing > 0:
+    data_diagnostics.append(
+        make_finmind_diagnostic(
+            "FinMind MA60",
+            None,
+            "部分股票無法取得足夠歷史股價計算 MA60。",
+            records=len(df_result) - ma60_missing,
+            sample_ids=df_result[df_result["ma60"].isna()]["stock_id"].head(10).tolist(),
+        )
+    )
+else:
+    data_diagnostics.append(make_finmind_diagnostic("FinMind MA60", 200, "", records=len(df_result)))
 
 df_result = df_result[
     df_result["ma60"].notna()
@@ -762,6 +838,7 @@ elif view == "明細表":
     render_growth_table(display_df)
     render_watchlist_adder(df_result, family_id, finmind_token)
 else:
+    render_data_diagnostics(data_diagnostics)
     if _price_date_caption:
         st.caption(_price_date_caption)
     st.write(
