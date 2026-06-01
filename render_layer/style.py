@@ -32,7 +32,20 @@ _CSS = """
     --shadow-hero: 0 8px 32px rgba(15, 23, 42, 0.24);
 }
 
-.stApp { background: var(--bg-app); }
+.stApp {
+    background: var(--bg-app);
+    color: var(--text-primary);
+}
+.stApp div[data-testid="stHeading"] *,
+.stApp div[data-testid="stMetric"] *,
+.stApp div[data-testid="stRadio"] *,
+.stApp div[data-testid="stCaptionContainer"] *,
+.stApp div[data-testid="stMarkdownContainer"] > p,
+.stApp div[data-testid="stMarkdownContainer"] > ul,
+.stApp div[data-testid="stMarkdownContainer"] > ol,
+.stApp div[data-testid="stMarkdownContainer"] > div:not(.page-header):not(.inv-header) {
+    color: var(--text-primary) !important;
+}
 
 .page-header,
 .inv-header {
@@ -486,10 +499,14 @@ div[data-testid="stSelectbox"] > div[data-baseweb="select"] > div:focus-within {
     background: linear-gradient(135deg, var(--bg-header-end), #4f8df7) !important;
     border: none !important;
     border-radius: 8px !important;
+    color: var(--text-on-header) !important;
     font-weight: 600 !important;
     letter-spacing: 0.02em !important;
     transition: all 0.18s ease !important;
     box-shadow: 0 2px 8px rgba(37,99,235,0.3) !important;
+}
+.stButton > button[kind="primary"] * {
+    color: var(--text-on-header) !important;
 }
 .stButton > button[kind="primary"]:hover {
     transform: translateY(-1px) !important;
