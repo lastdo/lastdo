@@ -556,6 +556,50 @@ def get_stock_news(symbol: str, stock_name: str, max_items: int = 15) -> list:
 # ─────────────────────────────────────────────
 # F-006 呼叫 Groq 進行技術分析（完全免費）
 # ─────────────────────────────────────────────
+def build_ai_report_metadata(
+    stock_data: pd.DataFrame,
+    ii_data: pd.DataFrame,
+    rev_data: pd.DataFrame | None,
+    eps_q: pd.DataFrame | None,
+    eps_y: pd.DataFrame | None,
+    gross_margin_data: pd.DataFrame | None,
+    foreign_holding_data: pd.DataFrame | None,
+    news_data: list | None,
+    taiex_change: float | None,
+) -> dict:
+    first_date = stock_data["date"].iloc[0].strftime("%Y-%m-%d") if not stock_data.empty else "-"
+    last_date = stock_data["date"].iloc[-1].strftime("%Y-%m-%d") if not stock_data.empty else "-"
+    eps_available = (eps_q is not None and not eps_q.empty) or (eps_y is not None and not eps_y.empty)
+    rows = [
+        ("股價與技術指標", not stock_data.empty, f"FinMind TaiwanStockPrice，{first_date}～{last_date}，{len(stock_data)} 筆"),
+        ("三大法人買賣超", not ii_data.empty, f"FinMind Institutional Investors，{len(ii_data)} 筆" if not ii_data.empty else "本次無法取得"),
+        ("月營收", rev_data is not None and not rev_data.empty, f"FinMind 月營收，{len(rev_data)} 筆" if rev_data is not None and not rev_data.empty else "資料不足"),
+        ("EPS / 本益比", eps_available, "FinMind EPS 季/年資料" if eps_available else "EPS 資料不足"),
+        ("毛利率", gross_margin_data is not None and not gross_margin_data.empty, f"FinMind 財報，{len(gross_margin_data)} 筆" if gross_margin_data is not None and not gross_margin_data.empty else "資料不足"),
+        ("外資持股比例", foreign_holding_data is not None and not foreign_holding_data.empty, f"FinMind 外資持股，{len(foreign_holding_data)} 筆" if foreign_holding_data is not None and not foreign_holding_data.empty else "資料不足"),
+        ("近一年新聞", bool(news_data), f"Google News，{len(news_data or [])} 則" if news_data else "抓取失敗或無結果"),
+        ("TAIEX 同期報酬", taiex_change is not None, f"{taiex_change:+.2f}%" if taiex_change is not None else "資料不足"),
+    ]
+    available = sum(1 for _, ok, _ in rows if ok)
+    if available >= 7:
+        completeness = "高"
+    elif available >= 5:
+        completeness = "中"
+    else:
+        completeness = "低"
+    return {
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "data_period": f"{first_date} ～ {last_date}",
+        "completeness": completeness,
+        "source_rows": rows,
+        "source_summary": "\n".join(
+            f"- {name}：{'可用' if ok else '不足'}｜{detail}"
+            for name, ok, detail in rows
+        ),
+        "missing_summary": "、".join(name for name, ok, _ in rows if not ok) or "無明顯缺漏",
+    }
+
+
 def generate_ai_insights(
     full_symbol: str,
     stock_name: str,
@@ -586,6 +630,18 @@ def generate_ai_insights(
     else:
         taiex_str = "無法取得（FinMind TAIEX 資料不足）"
         alpha_str = "無法計算"
+
+    report_meta = build_ai_report_metadata(
+        stock_data,
+        ii_data,
+        rev_data,
+        eps_q,
+        eps_y,
+        gross_margin_data,
+        foreign_holding_data,
+        news_data,
+        taiex_change,
+    )
 
     # 準備送給 AI 的精簡版資料（最多 60 筆，避免超出 token 限制）
     # volume 換算為張（÷1000），讓 AI 直接拿到正確單位
@@ -755,10 +811,28 @@ def generate_ai_insights(
 
     prompt = f"""請對 {full_symbol}（{stock_name}）進行深度台股研究報告，分析品質要達到券商研究員水準。
 
+## 固定輸出格式（必須完全依序輸出）
+請用 Markdown 固定輸出以下區塊，每次分析都要保持相同標題與順序：
+
+### 0. 決策摘要
+- 投資結論：用「可研究 / 觀察 / 暫不碰」三選一，不得使用保證語氣。
+- 核心理由：3 點以內，每點需引用本次提供的數字或明確事件。
+- 資料完整度：{report_meta['completeness']}；資料缺漏：{report_meta['missing_summary']}。
+
+### 1. 趨勢分析
+### 2. 基本面分析
+### 3. 籌碼面分析
+### 4. 基期風險評估
+### 5. 技術分析
+
+不得新增其他同層級主標題；下方「內容要求」只能被整理進上述固定區塊。
+
 ## 基礎數據（來自 FinMind API）
 - 分析期間：{first_date} 至 {last_date}
 - 期間價格變化：{price_change:.2f}%（從 NT${start_price:.2f} → NT${end_price:.2f}）
 - 最新收盤價：NT${end_price:.2f}
+- 資料完整度：{report_meta['completeness']}
+- 資料缺漏：{report_meta['missing_summary']}
 
 ### 【提供數據】股價與技術指標（最近60筆交易日，JSON格式）
 ※ volume 欄位單位為「張」，價格單位為新台幣元
@@ -767,7 +841,7 @@ def generate_ai_insights(
 {news_section}
 ---
 
-## 分析要求（每節都必須給出具體數字，不可只說定性描述）
+## 內容要求（每個固定區塊都必須給出具體數字，不可只說定性描述）
 
 ### 1. 趨勢分析
 請明確說明：
@@ -945,6 +1019,7 @@ if analyze_btn:
         "data_diagnostics": st.session_state.get("_data_diagnostics", []),
     }
     st.session_state.pop("_ai_report", None)
+    st.session_state.pop("_ai_report_meta", None)
     st.session_state.pop("_news_data", None)
 
 # ════════════════════════════════════════════
@@ -1401,6 +1476,11 @@ if "_cache" in st.session_state:
     with tab2:
         st.subheader("🤖 AI 綜合分析（Groq + Llama 3.3 70B）")
         st.caption("AI 同時整合 FinMind 量化數據與即時新聞進行分析，所有內容僅供教育研究參考。")
+        if st.button("重新產生 AI 報告", use_container_width=True):
+            st.session_state.pop("_ai_report", None)
+            st.session_state.pop("_ai_report_meta", None)
+            st.session_state.pop("_news_data", None)
+            st.rerun()
 
         if "_ai_report" not in st.session_state:
             with st.spinner("正在抓取近一年即時新聞（Google News）..."):
@@ -1421,11 +1501,34 @@ if "_cache" in st.session_state:
                     news_data=news_data,
                     taiex_change=taiex_change,
                 )
+            ai_report_meta = build_ai_report_metadata(
+                stock_data,
+                ii_data,
+                rev_data,
+                eps_q,
+                eps_y,
+                gross_margin_data,
+                foreign_holding_data,
+                news_data,
+                taiex_change,
+            )
             st.session_state["_ai_report"] = ai_report
+            st.session_state["_ai_report_meta"] = ai_report_meta
             st.session_state["_news_data"] = news_data
         else:
             ai_report = st.session_state["_ai_report"]
             news_data = st.session_state.get("_news_data", [])
+            ai_report_meta = st.session_state.get("_ai_report_meta") or build_ai_report_metadata(
+                stock_data,
+                ii_data,
+                rev_data,
+                eps_q,
+                eps_y,
+                gross_margin_data,
+                foreign_holding_data,
+                news_data,
+                taiex_change,
+            )
             if news_data:
                 st.caption(f"📰 已抓取 {len(news_data)} 則近一年新聞供 AI 參考")
 

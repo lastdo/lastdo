@@ -624,6 +624,11 @@ section[data-testid="stSidebar"] .stButton > button:hover {
     border-color: #6f86a0 !important;
     color: #ffffff !important;
 }
+section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] *,
+section[data-testid="stSidebar"] div[data-testid="stCaptionContainer"] *,
+section[data-testid="stSidebar"] div[data-testid="stHeading"] * {
+    color: var(--text-on-dark) !important;
+}
 
 #MainMenu, footer { visibility: hidden; }
 div[data-testid="stDecoration"] { display: none; }
