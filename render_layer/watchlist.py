@@ -59,16 +59,29 @@ def render_watchlist_adder(
 
     selected_symbol = str(selected["stock_id"]).strip()
     already_exists = selected_symbol in existing_symbols
-    chart_df = chart_loader(selected_symbol, finmind_token)
+    try:
+        chart_df = chart_loader(selected_symbol, finmind_token)
+    except Exception:
+        chart_df = pd.DataFrame()
+        st.warning("走勢圖暫時無法載入，但仍可加入自選股。")
 
     st.markdown("#### 技術線型")
+    support_line = None
+    if support_line_builder:
+        try:
+            support_line = support_line_builder(selected)
+        except Exception:
+            support_line = None
     chart_df = _render_price_ma_chart(
         chart_df,
-        support_line=support_line_builder(selected) if support_line_builder else None,
+        support_line=support_line,
     )
 
     if caption_builder:
-        st.caption(caption_builder(selected, chart_df))
+        try:
+            st.caption(caption_builder(selected, chart_df))
+        except Exception:
+            st.caption("圖表說明暫時無法產生。")
     if already_exists:
         st.info(f"{selected_symbol} 已經在這組 family_id 的持股 / 自選股清單中。")
 
@@ -92,6 +105,10 @@ def _render_price_ma_chart(chart_df: pd.DataFrame, support_line: float | None = 
     if chart_df.empty:
         st.info("這檔股票暫時抓不到技術線型資料，請稍後再試。")
         return chart_df
+    required_columns = {"date", "close"}
+    if not required_columns.issubset(chart_df.columns):
+        st.info("走勢圖資料欄位不完整，暫時略過圖表。")
+        return pd.DataFrame()
 
     chart_df = chart_df.copy().sort_values("date").reset_index(drop=True)
     if "ma20" not in chart_df.columns:
