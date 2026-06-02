@@ -17,6 +17,7 @@ from data_layer.market_api import (
 )
 from data_layer.app_common import get_runtime_secret
 from data_layer.portfolio_store import get_default_family_id
+from data_layer.public_valuation import attach_public_valuation, fetch_public_pe_ratios_with_diagnostics
 from render_layer.diagnostics import render_data_diagnostics
 from render_layer.watchlist import format_watchlist_number, render_watchlist_adder as render_watchlist_adder_base
 
@@ -583,6 +584,26 @@ progress.progress(50, text=f"📊 成交量+營收通過 {n_candidates} 檔，�
 if n_candidates == 0:
     progress.progress(100, text="✅ 完成")
     st.warning("⚠️ 沒有股票通過成交量與月營收條件，請放寬設定。")
+    st.stop()
+
+progress.progress(52, text="取得官方 PE 並計算近 4 季 EPS...")
+df_public_pe, pe_diagnostics = fetch_public_pe_ratios_with_diagnostics()
+data_diagnostics.extend(pe_diagnostics)
+if df_public_pe.empty:
+    progress.progress(100, text="完成")
+    render_data_diagnostics(data_diagnostics, expanded=True)
+    st.error("官方 PE 資料暫時無法取得，無法計算近 4 季 EPS。")
+    st.stop()
+
+df_candidates = attach_public_valuation(df_candidates, df_public_pe)
+df_candidates = df_candidates[
+    pd.to_numeric(df_candidates["ttm_eps"], errors="coerce") > 3
+].copy().reset_index(drop=True)
+n_candidates = len(df_candidates)
+
+if n_candidates == 0:
+    progress.progress(100, text="完成")
+    st.warning("沒有股票通過近 4 季 EPS > 3 的門檻，請放寬篩選條件。")
     st.stop()
 
 df_history_targets = df_candidates.sort_values(
