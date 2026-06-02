@@ -22,7 +22,11 @@ from data_layer.market_data import (
     latest_revenue_month,
     prev_roc_month,
 )
-from data_layer.market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
+from data_layer.market_api import (
+    fetch_json_tpex as fetch_json_tpex_base,
+    fetch_json_twse as fetch_json_twse_base,
+    fetch_latest_twse_price_rows,
+)
 from data_layer.portfolio_store import get_default_family_id
 from data_layer.public_valuation import attach_public_valuation, fetch_public_pe_ratios_with_diagnostics
 from render_layer.diagnostics import render_data_diagnostics
@@ -33,7 +37,6 @@ load_dotenv()
 # ------------------------------
 # API 與常數
 # ------------------------------
-URL_TWSE_PRICE  = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 URL_TWSE_REV    = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
 URL_TPEX_PRICE  = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 URL_TPEX_REV    = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"
@@ -497,7 +500,7 @@ progress = st.progress(0, text="開始整理資料...")
 data_diagnostics = []
 
 progress.progress(5, text="正在下載股價資料（TWSE）...")
-raw_twse_price, _diag = fetch_json_with_diagnostic(fetch_json_twse, URL_TWSE_PRICE, "TWSE 股價")
+raw_twse_price, _diag = fetch_json_with_diagnostic(fetch_latest_twse_price_rows, "", "TWSE 股價")
 data_diagnostics.append(_diag)
 
 progress.progress(18, text="正在下載股價資料（TPEX）...")

@@ -10,7 +10,11 @@ from data_layer.institutional_flow import (
     fetch_twse_3insti as fetch_twse_3insti_shared,
 )
 from data_layer.market_data import build_price_snapshot
-from data_layer.market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
+from data_layer.market_api import (
+    fetch_json_tpex as fetch_json_tpex_base,
+    fetch_json_twse as fetch_json_twse_base,
+    fetch_latest_twse_price_rows,
+)
 from data_layer.portfolio_store import get_default_family_id
 from data_layer.public_valuation import attach_public_valuation, fetch_public_pe_ratios
 from data_layer.app_common import get_runtime_secret
@@ -24,7 +28,6 @@ FAMILY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 # ─────────────────────────────────────────────
 # API 端點
 # ─────────────────────────────────────────────
-URL_TWSE_PRICE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 from data_layer.export_utils import dataframe_to_csv_bytes
 
@@ -530,7 +533,7 @@ progress = st.progress(0, text="🚀 準備中...")
 
 progress.progress(5, text="📈 取得上市股價與成交量（TWSE）...")
 try:
-    raw_twse_price = fetch_json_twse(URL_TWSE_PRICE)
+    raw_twse_price = fetch_latest_twse_price_rows()
 except Exception as e:
     st.error(f"❌ 上市股價 API 失敗：{e}"); st.stop()
 

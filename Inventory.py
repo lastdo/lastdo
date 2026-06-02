@@ -11,7 +11,7 @@ from data_layer.data_diagnostics import (
     fetch_json_with_diagnostic,
     make_partial_diagnostic,
 )
-from data_layer.market_api import fetch_json_tpex, fetch_json_twse
+from data_layer.market_api import fetch_json_tpex, fetch_latest_twse_price_rows
 from data_layer.portfolio_store import (
     create_portfolio_item,
     delete_portfolio_item,
@@ -37,7 +37,6 @@ configure_runtime()
 
 BROKER_FEE_RATE = 0.001425
 STOCK_SELL_TAX_RATE = 0.003
-URL_TWSE_PRICE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 FAMILY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 ANALYSIS_DIR = ensure_analysis_dir()
@@ -80,7 +79,7 @@ def fetch_market_snapshot() -> tuple[dict, list[str], list[dict]]:
     errors: list[str] = []
     diagnostics = []
 
-    raw_twse, diag_twse = fetch_json_with_diagnostic(fetch_json_twse, URL_TWSE_PRICE, "TWSE 行情快照")
+    raw_twse, diag_twse = fetch_json_with_diagnostic(fetch_latest_twse_price_rows, "", "TWSE 行情快照")
     diagnostics.append(diag_twse.to_dict())
     if raw_twse:
         try:

@@ -10,7 +10,11 @@ from data_layer.finmind_api import (
     fetch_finmind_price_frame,
 )
 from data_layer.market_data import build_latest_revenue_view, build_price_snapshot, build_revenue_snapshot
-from data_layer.market_api import fetch_json_tpex as fetch_json_tpex_base, fetch_json_twse as fetch_json_twse_base
+from data_layer.market_api import (
+    fetch_json_tpex as fetch_json_tpex_base,
+    fetch_json_twse as fetch_json_twse_base,
+    fetch_latest_twse_price_rows,
+)
 from data_layer.app_common import get_runtime_secret
 from data_layer.portfolio_store import get_default_family_id
 from render_layer.diagnostics import render_data_diagnostics
@@ -102,7 +106,6 @@ def render_bottom_tag_explainer(
 # ─────────────────────────────────────────────
 # API 端點
 # ─────────────────────────────────────────────
-URL_TWSE_PRICE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 URL_TWSE_REV = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
 URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 URL_TPEX_REV = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"
@@ -524,7 +527,7 @@ progress = st.progress(0, text="🚀 準備中...")
 data_diagnostics = []
 
 progress.progress(8, text="📈 取得上市股價（TWSE）...")
-raw_twse_price, _diag = fetch_json_with_diagnostic(fetch_json_twse, URL_TWSE_PRICE, "TWSE 股價")
+raw_twse_price, _diag = fetch_json_with_diagnostic(fetch_latest_twse_price_rows, "", "TWSE 股價")
 data_diagnostics.append(_diag)
 
 progress.progress(16, text="📈 取得上櫃股價（TPEX）...")

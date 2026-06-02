@@ -15,6 +15,7 @@ from data_layer.market_data import (
     build_recent_revenue_metrics,
     build_revenue_snapshot,
 )
+from data_layer.market_api import parse_twse_mi_index_price_rows
 from data_layer.public_valuation import attach_public_valuation
 
 
@@ -49,6 +50,35 @@ class MarketDataContractTests(unittest.TestCase):
 
         self.assertTrue(df.empty)
         self.assertEqual(list(df.columns), list(PRICE_SNAPSHOT_CONTRACT.required))
+
+    def test_parse_twse_mi_index_price_rows_matches_price_snapshot_input(self):
+        payload = {
+            "date": "20260602",
+            "stat": "OK",
+            "tables": [
+                {
+                    "fields": [
+                        "\u8b49\u5238\u4ee3\u865f",
+                        "\u8b49\u5238\u540d\u7a31",
+                        "\u6210\u4ea4\u80a1\u6578",
+                        "\u6536\u76e4\u50f9",
+                        "\u6f32\u8dcc(+/-)",
+                        "\u6f32\u8dcc\u50f9\u5dee",
+                    ],
+                    "data": [
+                        ["2330", "TSMC", "30,000", "2,380.00", "<p style='color:red'>+</p>", "25.00"],
+                    ],
+                }
+            ],
+        }
+
+        rows = parse_twse_mi_index_price_rows(payload)
+
+        self.assertEqual(rows[0]["Code"], "2330")
+        self.assertEqual(rows[0]["ClosingPrice"], "2,380.00")
+        self.assertEqual(rows[0]["TradeVolume"], "30,000")
+        self.assertEqual(rows[0]["Change"], 25.0)
+        self.assertEqual(rows[0]["Date"], "20260602")
 
     def test_build_revenue_snapshot_and_recent_metrics(self):
         raw_twse = [
