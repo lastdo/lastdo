@@ -5,14 +5,20 @@ from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
-from data_layer.data_diagnostics import fetch_json_with_diagnostic, make_finmind_diagnostic
+from data_layer.data_diagnostics import (
+    DataSourceDiagnostic,
+    STATUS_COMPLETE,
+    STATUS_FAILED,
+    fetch_json_with_diagnostic,
+    make_finmind_diagnostic,
+)
 from data_layer.finmind_api import (
     fetch_finmind_price_frame,
 )
-from data_layer.market_data import build_latest_revenue_view, build_price_snapshot, build_revenue_snapshot
+from data_layer.market_data import build_latest_revenue_view, build_price_snapshot
+from data_layer.mops_revenue import fetch_mops_recent_revenue_frame, latest_revenue_ym
 from data_layer.market_api import (
     fetch_json_tpex as fetch_json_tpex_base,
-    fetch_json_twse as fetch_json_twse_base,
     fetch_latest_twse_price_rows,
 )
 from data_layer.app_common import get_runtime_secret
@@ -107,9 +113,7 @@ def render_bottom_tag_explainer(
 # ─────────────────────────────────────────────
 # API 端點
 # ─────────────────────────────────────────────
-URL_TWSE_REV = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
 URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
-URL_TPEX_REV = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"
 from data_layer.export_utils import dataframe_to_csv_bytes
 
 # ─────────────────────────────────────────────
@@ -220,7 +224,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("**資料來源**")
-    st.caption("📡 股價/月營收：TWSE + TPEX OpenAPI（免費）")
+    st.caption("📡 股價：TWSE + TPEX OpenAPI（免費）；月營收：MOPS")
     st.caption("📡 近半年歷史股價：FinMind TaiwanStockPrice（三線程查詢）")
     st.caption("📡 本益比：官方上市櫃 API")
     st.caption("📢 本系統僅供學術研究，不構成投資建議")
@@ -424,7 +428,7 @@ if not run_btn:
             render_watchlist_adder(_r, family_id, finmind_token)
         else:
             st.caption("這是上次執行結果；若要更新資料，請重新執行篩選。")
-            st.caption("資料來源：股價/月營收來自 TWSE + TPEX OpenAPI；歷史股價來自 FinMind TaiwanStockPrice。")
+            st.caption("資料來源：股價來自 TWSE + TPEX OpenAPI；月營收來自 MOPS；歷史股價來自 FinMind TaiwanStockPrice。")
         _csv = dataframe_to_csv_bytes(_disp)
         st.download_button(
             "⬇️ 下載 CSV（Excel 可直接開啟）", _csv,
@@ -441,7 +445,7 @@ if not run_btn:
 | 自底部起漲幅 | ≤ **{rebound_max:.0f}%** | 最新收盤價 / 支撐價 - 1 |
 | 股價 | > **{price_min:.0f}** 元 | TWSE/TPEX OpenAPI（免費） |
 | 前一日成交量 | ≥ **{int(vol_min):,}** 張 | TWSE/TPEX OpenAPI（免費） |
-| 月營收(單月)年成長率 | > **{rev_growth_min:.0f}%** | TWSE/TPEX OpenAPI（免費） |
+| 月營收(單月)年成長率 | > **{rev_growth_min:.0f}%** | MOPS 月營收 |
 **策略邏輯：**
 
 先剔除 100 元以下股票，再用成交量與月營收年增率篩出基本流動性與營收仍正向的股票，
@@ -456,13 +460,13 @@ if not run_btn:
 # 共用函式
 # ─────────────────────────────────────────────
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_json_twse(url: str) -> list:
-    return fetch_json_twse_base(url)
+def fetch_json_tpex(url: str) -> list:
+    return fetch_json_tpex_base(url)
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_json_tpex(url: str) -> list:
-    return fetch_json_tpex_base(url)
+def fetch_mops_recent_revenue(latest_ym: str, months: int) -> pd.DataFrame:
+    return fetch_mops_recent_revenue_frame(latest_ym, months=months)
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -535,21 +539,37 @@ progress.progress(16, text="📈 取得上櫃股價（TPEX）...")
 raw_tpex_price, _diag = fetch_json_with_diagnostic(fetch_json_tpex, URL_TPEX_PRICE, "TPEX 股價")
 data_diagnostics.append(_diag)
 
-progress.progress(24, text="💰 取得上市月營收（TWSE）...")
-raw_twse_rev, _diag = fetch_json_with_diagnostic(fetch_json_twse, URL_TWSE_REV, "TWSE 月營收")
-data_diagnostics.append(_diag)
-
-progress.progress(32, text="💰 取得上櫃月營收（TPEX）...")
-raw_tpex_rev, _diag = fetch_json_with_diagnostic(fetch_json_tpex, URL_TPEX_REV, "TPEX 月營收")
-data_diagnostics.append(_diag)
+_latest_rev_ym = latest_revenue_ym()
+progress.progress(24, text=f"💰 取得 MOPS 月營收（{_latest_rev_ym} 起近 2 月）...")
+try:
+    df_rev = fetch_mops_recent_revenue(_latest_rev_ym, months=2)
+    data_diagnostics.append(
+        DataSourceDiagnostic(
+            source="MOPS 月營收",
+            status=STATUS_COMPLETE if not df_rev.empty else STATUS_FAILED,
+            message="抓取成功。" if not df_rev.empty else "MOPS 月營收回傳空資料。",
+            records=len(df_rev),
+        )
+    )
+except Exception as exc:
+    df_rev = pd.DataFrame()
+    data_diagnostics.append(
+        DataSourceDiagnostic(
+            source="MOPS 月營收",
+            status=STATUS_FAILED,
+            message="抓取失敗，已將本資料源標記為不可用。",
+            detail=f"{type(exc).__name__}: {exc}",
+            records=0,
+        )
+    )
 
 render_data_diagnostics(data_diagnostics, expanded=any(item.status != "complete" for item in data_diagnostics))
 
 if not raw_twse_price and not raw_tpex_price:
     st.error("TWSE/TPEX 股價資料都無法取得，本頁無法產生可信選股結果。")
     st.stop()
-if not raw_twse_rev and not raw_tpex_rev:
-    st.error("TWSE/TPEX 月營收資料都無法取得，本頁無法產生可信選股結果。")
+if df_rev.empty:
+    st.error("MOPS 月營收資料無法取得，本頁無法產生可信選股結果。")
     st.stop()
 
 progress.progress(40, text="🔧 整理股價與月營收資料...")
@@ -566,7 +586,6 @@ df_price_filtered = df_price[
 # ─────────────────────────────────────────────
 # Step 3：整理最新單月營收
 # ─────────────────────────────────────────────
-df_rev = build_revenue_snapshot(raw_twse_rev, raw_tpex_rev)
 df_rev_latest = build_latest_revenue_view(df_rev)
 
 # ─────────────────────────────────────────────
@@ -850,7 +869,7 @@ else:
     )
     st.caption("以下為已成功計算近半年支撐價的股票，包含未通過起漲幅條件者。")
     st.dataframe(_diag, use_container_width=True, hide_index=True)
-    st.caption("資料來源：股價/月營收來自 TWSE + TPEX OpenAPI；歷史股價來自 FinMind TaiwanStockPrice。")
+    st.caption("資料來源：股價來自 TWSE + TPEX OpenAPI；月營收來自 MOPS；歷史股價來自 FinMind TaiwanStockPrice。")
 
 csv = dataframe_to_csv_bytes(display_df)
 st.download_button(
