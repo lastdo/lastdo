@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from io import StringIO
 from typing import Iterable
 
+import httpx
 import pandas as pd
 from twmops import RevenueFetcher
 
 
 MOPS_MARKETS = ("sii", "otc")
 MOPS_COMPANY_TYPES = (0, 1)
+MOPS_REVENUE_COLUMNS = ["stock_id", "rev_ym", "rev_yoy", "rev_cur", "rev_ly"]
 
 
 def latest_revenue_ym(today: date | datetime | None = None) -> str:
@@ -82,6 +85,40 @@ def _normalize_revenue_frame(raw: object, market: str, company_type: int, ym: st
     return normalized
 
 
+def _fetch_market_revenue_with_redirects(
+    fetcher: RevenueFetcher,
+    roc_year: int,
+    month: int,
+    market: str,
+    company_type: int,
+) -> object:
+    url = fetcher._get_revenue_url(roc_year, month, market, company_type)
+    headers = fetcher.client._get_headers(url)
+    timeout = getattr(fetcher.client, "timeout", 20)
+
+    for verify_ssl in (True, False):
+        try:
+            with httpx.Client(
+                timeout=timeout,
+                follow_redirects=True,
+                verify=verify_ssl,
+            ) as client:
+                response = client.get(url, headers=headers)
+            break
+        except httpx.ConnectError:
+            if not verify_ssl:
+                raise
+    else:
+        return []
+
+    if response.status_code == 404:
+        return []
+    response.raise_for_status()
+    response.encoding = "big5"
+    dfs = pd.read_html(StringIO(response.text))
+    return fetcher._parse_revenue_tables(dfs, roc_year, month)
+
+
 def fetch_mops_month_revenue_frame(
     roc_year: int,
     month: int,
@@ -94,13 +131,25 @@ def fetch_mops_month_revenue_frame(
 
     for market in markets:
         for company_type in company_types:
-            raw = fetcher.get_market_revenue(int(roc_year), int(month), str(market), int(company_type))
+            try:
+                raw = fetcher.get_market_revenue(int(roc_year), int(month), str(market), int(company_type))
+            except Exception:
+                try:
+                    raw = _fetch_market_revenue_with_redirects(
+                        fetcher,
+                        int(roc_year),
+                        int(month),
+                        str(market),
+                        int(company_type),
+                    )
+                except Exception:
+                    continue
             frame = _normalize_revenue_frame(raw, str(market), int(company_type), ym)
             if not frame.empty:
                 frames.append(frame)
 
     if not frames:
-        return pd.DataFrame(columns=["stock_id", "rev_ym", "rev_yoy", "rev_cur", "rev_ly"])
+        return pd.DataFrame(columns=MOPS_REVENUE_COLUMNS)
 
     result = pd.concat(frames, ignore_index=True)
     return result.drop_duplicates(subset=["stock_id", "rev_ym"], keep="first").reset_index(drop=True)
@@ -119,6 +168,6 @@ def fetch_mops_recent_revenue_frame(latest_ym: str | None = None, months: int = 
         ym = previous_revenue_ym(ym)
 
     if not month_frames:
-        return pd.DataFrame(columns=["stock_id", "rev_ym", "rev_yoy", "rev_cur", "rev_ly"])
+        return pd.DataFrame(columns=MOPS_REVENUE_COLUMNS)
 
     return pd.concat(month_frames, ignore_index=True).reset_index(drop=True)

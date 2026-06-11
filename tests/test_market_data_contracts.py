@@ -1,7 +1,9 @@
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
+from data_layer import mops_revenue
 from data_layer.contracts import (
     PRICE_SNAPSHOT_CONTRACT,
     PUBLIC_PE_CONTRACT,
@@ -20,6 +22,71 @@ from data_layer.public_valuation import attach_public_valuation
 
 
 class MarketDataContractTests(unittest.TestCase):
+    def test_fetch_mops_month_revenue_falls_back_when_twmops_fails(self):
+        class FakeFetcher:
+            def get_market_revenue(self, year, month, market, company_type):
+                raise RuntimeError("HTTP 307")
+
+        fallback_rows = [
+            {
+                "stock_id": "2330",
+                "company_name": "TSMC",
+                "year": 115,
+                "month": 5,
+                "revenue": "300000",
+                "revenue_last_year": "200000",
+                "yoy_change": "50.0",
+            }
+        ]
+
+        with patch("data_layer.mops_revenue.RevenueFetcher", return_value=FakeFetcher()):
+            with patch(
+                "data_layer.mops_revenue._fetch_market_revenue_with_redirects",
+                return_value=fallback_rows,
+            ):
+                df = mops_revenue.fetch_mops_month_revenue_frame(
+                    115,
+                    5,
+                    markets=("sii",),
+                    company_types=(0,),
+                )
+
+        self.assertEqual(df["stock_id"].tolist(), ["2330"])
+        self.assertEqual(df.loc[0, "rev_ym"], "11505")
+        self.assertEqual(df.loc[0, "rev_yoy"], 50.0)
+
+    def test_fetch_mops_month_revenue_keeps_successful_sources(self):
+        class FakeFetcher:
+            def get_market_revenue(self, year, month, market, company_type):
+                if company_type == 1:
+                    raise RuntimeError("HTTP 307")
+                return [
+                    {
+                        "stock_id": "2330",
+                        "company_name": "TSMC",
+                        "year": year,
+                        "month": month,
+                        "revenue": "300000",
+                        "revenue_last_year": "200000",
+                        "yoy_change": "50.0",
+                    }
+                ]
+
+        with patch("data_layer.mops_revenue.RevenueFetcher", return_value=FakeFetcher()):
+            with patch(
+                "data_layer.mops_revenue._fetch_market_revenue_with_redirects",
+                side_effect=RuntimeError("still failed"),
+            ):
+                df = mops_revenue.fetch_mops_month_revenue_frame(
+                    115,
+                    5,
+                    markets=("sii",),
+                    company_types=(0, 1),
+                )
+
+        self.assertEqual(df["stock_id"].tolist(), ["2330"])
+        self.assertEqual(df.loc[0, "mops_company_type"], 0)
+
     def test_build_price_snapshot_normalizes_twse_and_tpex(self):
         raw_twse = [
             {
