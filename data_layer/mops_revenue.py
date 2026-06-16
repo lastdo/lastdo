@@ -8,6 +8,8 @@ import httpx
 import pandas as pd
 from twmops import RevenueFetcher
 
+from data_layer.time_utils import taipei_today
+
 
 MOPS_MARKETS = ("sii", "otc")
 MOPS_COMPANY_TYPES = (0, 1)
@@ -17,7 +19,7 @@ MOPS_REVENUE_COLUMNS = ["stock_id", "rev_ym", "rev_yoy", "rev_cur", "rev_ly"]
 def latest_revenue_ym(today: date | datetime | None = None) -> str:
     """Return the most recent complete revenue month in ROC yyyMM format."""
     current = today.date() if isinstance(today, datetime) else today
-    current = current or date.today()
+    current = current or taipei_today()
     previous_month = current.replace(day=1) - timedelta(days=1)
     return f"{previous_month.year - 1911}{previous_month.month:02d}"
 

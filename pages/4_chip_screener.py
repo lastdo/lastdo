@@ -2,8 +2,9 @@ import re
 import requests
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import timedelta
 from dotenv import load_dotenv
+from data_layer.time_utils import taipei_now, taipei_today
 from data_layer.finmind_api import fetch_finmind_price_frame
 from data_layer.institutional_flow import (
     fetch_tpex_3insti as fetch_tpex_3insti_shared,
@@ -129,6 +130,7 @@ with st.sidebar:
     if st.button("🗑️ 清除快取（強制重新抓資料）", use_container_width=True):
         st.cache_data.clear()
         st.session_state.pop("chip_screener_result", None)
+        st.session_state.pop("chip_screener_result_params", None)
         st.success("✅ 本頁結果已清除，請重新選股")
         st.stop()
 
@@ -310,12 +312,13 @@ def render_result_view_selector(key: str, default: str = "標記說明") -> str:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_finmind_price_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
-    start_date = (datetime.today() - timedelta(days=220)).strftime("%Y-%m-%d")
+    today = taipei_today()
+    start_date = (today - timedelta(days=220)).strftime("%Y-%m-%d")
     try:
         df, status_code, _msg, _retry_after = fetch_finmind_price_frame(
             symbol,
             start_date,
-            datetime.today().strftime("%Y-%m-%d"),
+            today.strftime("%Y-%m-%d"),
             token=token,
             timeout=20,
             sleep_seconds=0,
@@ -372,8 +375,20 @@ if not FAMILY_ID_PATTERN.fullmatch(family_id):
     st.stop()
 
 
+def current_chip_screener_params() -> dict:
+    return {
+        "days_n": int(days_n),
+        "foreign_buy_min": float(foreign_buy_min),
+        "pe_max": float(pe_max),
+        "price_min": float(price_min),
+        "vol_min": int(vol_min),
+    }
+
+
 if not run_btn:
-    if "chip_screener_result" in st.session_state:
+    _current_params = current_chip_screener_params()
+    _cached_params = st.session_state.get("chip_screener_result_params")
+    if "chip_screener_result" in st.session_state and _cached_params == _current_params:
         _r = st.session_state["chip_screener_result"]
         st.info("💡 顯示上次選股結果。如需重新選股請點擊「開始選股」。")
         _count = len(_r)
@@ -392,7 +407,7 @@ if not run_btn:
         _csv = dataframe_to_csv_bytes(_disp)
         st.download_button(
             "⬇️ 下載 CSV（Excel 可直接開啟）", _csv,
-            f"外資籌碼重壓_{datetime.today().strftime('%Y%m%d')}.csv", "text/csv",
+            f"外資籌碼重壓_{taipei_now().strftime('%Y%m%d')}.csv", "text/csv",
         )
         st.stop()
     st.info("👈 請在左側設定條件後，點擊「開始選股」")
@@ -574,7 +589,7 @@ _daily_frames  = []
 _valid_dates   = []
 _inst_fetch_errors = []
 for _i in range(days_n + 15):   # 加足緩衝，防止連續假日
-    _d = datetime.today().date() - timedelta(days=_i + 1)
+    _d = taipei_today() - timedelta(days=_i + 1)
     if _d.weekday() >= 5:          # 跳過週六日
         continue
     _date_ymd = _d.strftime("%Y%m%d")
@@ -716,6 +731,7 @@ progress.progress(100, text="✅ 選股完成！")
 
 # 存入 session_state，避免按下載後 rerun 時資料消失
 st.session_state["chip_screener_result"] = df_result
+st.session_state["chip_screener_result_params"] = current_chip_screener_params()
 
 # ─────────────────────────────────────────────
 # 顯示結果
@@ -785,7 +801,7 @@ csv_bytes = dataframe_to_csv_bytes(display_df)
 st.download_button(
     label="⬇️ 下載 CSV（Excel 可直接開啟）",
     data=csv_bytes,
-    file_name=f"外資籌碼重壓_{datetime.today().strftime('%Y%m%d')}.csv",
+    file_name=f"外資籌碼重壓_{taipei_now().strftime('%Y%m%d')}.csv",
     mime="text/csv",
 )
 

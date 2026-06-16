@@ -1,8 +1,10 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 import re
 import time
 
 import requests
+
+from data_layer.time_utils import taipei_today
 
 
 DEFAULT_HEADERS = {"User-Agent": "Mozilla/5.0"}
@@ -70,7 +72,7 @@ def _twse_mi_index_change(sign_value, change_value):
 
 
 def _date_candidates(days: int = 7) -> list[str]:
-    today = datetime.today()
+    today = taipei_today()
     return [(today - timedelta(days=offset)).strftime("%Y%m%d") for offset in range(days)]
 
 

@@ -12,6 +12,7 @@ from data_layer.data_diagnostics import (
     make_partial_diagnostic,
 )
 from data_layer.market_api import fetch_json_tpex, fetch_latest_twse_price_rows
+from data_layer.time_utils import taipei_date_string
 from data_layer.portfolio_store import (
     create_portfolio_item,
     delete_portfolio_item,
@@ -57,7 +58,7 @@ def _parse_market_number(value):
 def _normalize_price_date(raw_value) -> str:
     text = str(raw_value or "").strip()
     if not text:
-        return datetime.today().strftime("%Y-%m-%d")
+        return taipei_date_string()
     if len(text) == 7 and text.isdigit():
         year = int(text[:3]) + 1911
         return f"{year:04d}-{text[3:5]}-{text[5:7]}"

@@ -4,11 +4,12 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from groq import Groq
-from datetime import datetime, timedelta
+from datetime import timedelta
 from dotenv import load_dotenv
 from data_layer.app_common import ensure_analysis_dir, get_runtime_secret
 from data_layer.data_diagnostics import make_failed_diagnostic, make_finmind_diagnostic
 from data_layer.export_utils import CSV_ENCODING, dataframe_to_csv_bytes
+from data_layer.time_utils import taipei_now, taipei_today
 from render_layer.diagnostics import render_data_diagnostics
 
 ANALYSIS_DIR = ensure_analysis_dir()
@@ -66,8 +67,8 @@ with st.sidebar:
         help="請至 https://console.groq.com 免費申請 API Key（無需信用卡）",
     ).strip()
 
-    default_start = datetime.today() - timedelta(days=90)
-    default_end = datetime.today()
+    default_end = taipei_today()
+    default_start = default_end - timedelta(days=90)
 
     start_date = st.date_input("起始日期", value=default_start)
     end_date = st.date_input("結束日期", value=default_end)
@@ -329,8 +330,9 @@ def get_monthly_revenue(symbol: str, token: str = "") -> pd.DataFrame:
     取得近兩年月營收資料（TaiwanStockMonthRevenue）。
     回傳欄位：date(年月), revenue(千元), yoy(年增率%)。
     """
-    two_years_ago = (datetime.today() - timedelta(days=730)).strftime("%Y-%m-%d")
-    today_str = datetime.today().strftime("%Y-%m-%d")
+    today = taipei_today()
+    two_years_ago = (today - timedelta(days=730)).strftime("%Y-%m-%d")
+    today_str = today.strftime("%Y-%m-%d")
     df = _finmind_get("TaiwanStockMonthRevenue", symbol, two_years_ago, today_str, token)
     if df.empty:
         return pd.DataFrame()
@@ -361,9 +363,10 @@ def get_eps_data(symbol: str, token: str = "") -> tuple:
     回傳 (quarterly_df, annual_df)，欄位：date, eps。
     """
     # 從兩年前的1月1日開始，確保 Q1 也包含在內，年EPS加總才完整
-    start_year = datetime.today().year - 2
+    today = taipei_today()
+    start_year = today.year - 2
     start_date = f"{start_year}-01-01"
-    today_str = datetime.today().strftime("%Y-%m-%d")
+    today_str = today.strftime("%Y-%m-%d")
     df = _finmind_get("TaiwanStockFinancialStatements", symbol, start_date, today_str, token)
     if df.empty:
         return pd.DataFrame(), pd.DataFrame()
@@ -398,8 +401,9 @@ def get_gross_margin(symbol: str, token: str = "") -> pd.DataFrame:
     取得近兩年季毛利率（TaiwanStockFinancialStatements）。
     回傳欄位：date, gross_profit, revenue, gross_margin(%)。
     """
-    two_years_ago = (datetime.today() - timedelta(days=730)).strftime("%Y-%m-%d")
-    today_str = datetime.today().strftime("%Y-%m-%d")
+    today = taipei_today()
+    two_years_ago = (today - timedelta(days=730)).strftime("%Y-%m-%d")
+    today_str = today.strftime("%Y-%m-%d")
     df = _finmind_get("TaiwanStockFinancialStatements", symbol, two_years_ago, today_str, token)
     if df.empty:
         return pd.DataFrame()
@@ -427,8 +431,9 @@ def get_foreign_holding(symbol: str, token: str = "") -> pd.DataFrame:
     取得近三個月外資持股比例（TaiwanStockShareholding）。
     回傳欄位：date, foreign_hold_ratio(%)。
     """
-    three_months_ago = (datetime.today() - timedelta(days=90)).strftime("%Y-%m-%d")
-    today_str = datetime.today().strftime("%Y-%m-%d")
+    today = taipei_today()
+    three_months_ago = (today - timedelta(days=90)).strftime("%Y-%m-%d")
+    today_str = today.strftime("%Y-%m-%d")
     df = _finmind_get("TaiwanStockShareholding", symbol, three_months_ago, today_str, token)
     if df.empty:
         return pd.DataFrame()
@@ -501,7 +506,7 @@ def get_stock_news(symbol: str, stock_name: str, max_items: int = 15) -> list:
     from urllib.parse import quote
     from email.utils import parsedate_to_datetime
 
-    one_year_ago = datetime.today() - timedelta(days=365)
+    one_year_ago = taipei_now().replace(tzinfo=None) - timedelta(days=365)
     query = quote(f"{stock_name} {symbol}")
     url = (
         f"https://news.google.com/rss/search"
@@ -588,7 +593,7 @@ def build_ai_report_metadata(
     else:
         completeness = "低"
     return {
-        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "generated_at": taipei_now().strftime("%Y-%m-%d %H:%M"),
         "data_period": f"{first_date} ～ {last_date}",
         "completeness": completeness,
         "source_rows": rows,
@@ -1540,7 +1545,7 @@ if "_cache" in st.session_state:
             report_header = (
                 f"# {symbol_input} {stock_name} AI 台股分析報告\n"
                 f"分析期間：{start_date} ～ {end_date}\n"
-                f"產生時間：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                f"產生時間：{taipei_now().strftime('%Y-%m-%d %H:%M')}\n\n"
                 "---\n\n"
             )
             report_full = report_header + ai_report + "\n\n---\n免責聲明：本報告由 AI 產生，僅供教育研究參考，不構成投資建議。\n"
@@ -1549,13 +1554,13 @@ if "_cache" in st.session_state:
                 st.download_button(
                     label="⬇️ 下載 AI 分析報告（Markdown）",
                     data=report_full.encode("utf-8"),
-                    file_name=f"{symbol_input}_{stock_name}_AI報告_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
+                    file_name=f"{symbol_input}_{stock_name}_AI報告_{taipei_now().strftime('%Y%m%d_%H%M')}.md",
                     mime="text/markdown",
                     use_container_width=True,
                 )
             with ai_save_col:
                 if st.button("💾 儲存 AI 報告到分析記錄", use_container_width=True):
-                    ts = datetime.now().strftime("%Y%m%d_%H%M")
+                    ts = taipei_now().strftime("%Y%m%d_%H%M")
                     save_path = ANALYSIS_DIR / f"{symbol_input}_{stock_name}_AI報告_{ts}.md"
                     save_path.write_text(report_full, encoding="utf-8")
                     st.success(f"✅ 已儲存到 analysis/{save_path.name}")

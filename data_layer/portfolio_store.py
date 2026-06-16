@@ -1,13 +1,13 @@
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any
 
 import streamlit as st
 
 from data_layer.app_common import get_portfolio_file
 from data_layer.contracts import PORTFOLIO_ITEM_FIELDS
+from data_layer.time_utils import utc_now_string
 
 try:
     import gspread
@@ -69,7 +69,7 @@ def _secrets() -> dict[str, Any]:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return utc_now_string()
 
 
 def _to_float(value):

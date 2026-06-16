@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
 from typing import Callable, Iterable
+
+from data_layer.time_utils import taipei_date_string
 
 
 STATUS_COMPLETE = "complete"
@@ -19,7 +20,7 @@ class DataSourceDiagnostic:
     records: int | None = None
     detail: str = ""
     sample_ids: list[str] = field(default_factory=list)
-    checked_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    checked_at: str = field(default_factory=lambda: taipei_date_string("%Y-%m-%d %H:%M:%S"))
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -35,7 +36,7 @@ def diagnostic_from_dict(item: dict | DataSourceDiagnostic) -> DataSourceDiagnos
         records=item.get("records"),
         detail=str(item.get("detail", "")),
         sample_ids=[str(x) for x in item.get("sample_ids", [])],
-        checked_at=str(item.get("checked_at", "")) or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        checked_at=str(item.get("checked_at", "")) or taipei_date_string("%Y-%m-%d %H:%M:%S"),
     )
 
 

@@ -1,6 +1,6 @@
 import re
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pandas as pd
 import streamlit as st
@@ -22,6 +22,7 @@ from data_layer.market_api import (
     fetch_latest_twse_price_rows,
 )
 from data_layer.app_common import get_runtime_secret
+from data_layer.time_utils import taipei_now, taipei_today
 from data_layer.portfolio_store import get_default_family_id
 from data_layer.public_valuation import attach_public_valuation, fetch_public_pe_ratios_with_diagnostics
 from render_layer.diagnostics import render_data_diagnostics
@@ -259,7 +260,7 @@ def format_wait_time(seconds):
 def format_retry_at(seconds):
     if seconds is None:
         return "未知"
-    retry_at = datetime.now() + timedelta(seconds=int(seconds))
+    retry_at = taipei_now() + timedelta(seconds=int(seconds))
     return retry_at.strftime("%H:%M:%S")
 
 
@@ -350,8 +351,9 @@ def render_result_view_selector(key: str, default: str = "標記說明") -> str:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_bottom_watchlist_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
-    start_date = (datetime.today().date() - timedelta(days=220)).strftime("%Y-%m-%d")
-    end_date = datetime.today().date().strftime("%Y-%m-%d")
+    today = taipei_today()
+    start_date = (today - timedelta(days=220)).strftime("%Y-%m-%d")
+    end_date = today.strftime("%Y-%m-%d")
     try:
         df, status_code, _msg, _retry_after = fetch_finmind_price_frame(
             symbol,
@@ -433,7 +435,7 @@ if not run_btn:
         _csv = dataframe_to_csv_bytes(_disp)
         st.download_button(
             "⬇️ 下載 CSV（Excel 可直接開啟）", _csv,
-            f"底部剛起漲選股_{datetime.today().strftime('%Y%m%d')}.csv", "text/csv",
+            f"底部剛起漲選股_{taipei_now().strftime('%Y%m%d')}.csv", "text/csv",
         )
         st.stop()
 
@@ -637,7 +639,7 @@ st.caption(
 # ─────────────────────────────────────────────
 # Step 5：三線程查詢近半年歷史股價並計算支撐價
 # ─────────────────────────────────────────────
-end_date = datetime.today().date()
+end_date = taipei_today()
 start_date = end_date - timedelta(days=int(support_months * 31))
 start_str = start_date.strftime("%Y-%m-%d")
 end_str = end_date.strftime("%Y-%m-%d")
@@ -875,5 +877,5 @@ else:
 csv = dataframe_to_csv_bytes(display_df)
 st.download_button(
     "⬇️ 下載 CSV（Excel 可直接開啟）", csv,
-    f"底部剛起漲選股_{datetime.today().strftime('%Y%m%d')}.csv", "text/csv",
+    f"底部剛起漲選股_{taipei_now().strftime('%Y%m%d')}.csv", "text/csv",
 )

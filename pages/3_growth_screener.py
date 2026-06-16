@@ -3,7 +3,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import timedelta
 from dotenv import load_dotenv
 from data_layer.data_diagnostics import (
     DataSourceDiagnostic,
@@ -13,6 +13,7 @@ from data_layer.data_diagnostics import (
     make_finmind_diagnostic,
 )
 from data_layer.app_common import get_runtime_secret
+from data_layer.time_utils import taipei_now, taipei_today
 from data_layer.finmind_api import (
     fetch_finmind_price_frame,
     fetch_finmind_result,
@@ -349,12 +350,13 @@ def render_result_view_selector(key: str, default: str = "標記說明") -> str:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_finmind_price_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
-    start_date = (datetime.today() - timedelta(days=220)).strftime("%Y-%m-%d")
+    today = taipei_today()
+    start_date = (today - timedelta(days=220)).strftime("%Y-%m-%d")
     params = {
         "dataset": "TaiwanStockPrice",
         "data_id": symbol,
         "start_date": start_date,
-        "end_date": datetime.today().strftime("%Y-%m-%d"),
+        "end_date": today.strftime("%Y-%m-%d"),
     }
     if token:
         params["token"] = token
@@ -455,7 +457,7 @@ if not run_btn:
         st.download_button(
             "下載 CSV",
             _csv,
-            f"成長股篩選_{datetime.today().strftime('%Y%m%d')}.csv",
+            f"成長股篩選_{taipei_now().strftime('%Y%m%d')}.csv",
             "text/csv",
         )
         st.stop()
@@ -494,12 +496,13 @@ def fetch_mops_recent_revenue(latest_ym: str, months: int) -> pd.DataFrame:
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_finmind_ma60(symbol: str, token: str = "") -> tuple[float | None, int | None, str]:
     """取得個股最新 60 日均線（季線）與查詢狀態。"""
-    start_date = (datetime.today() - timedelta(days=140)).strftime("%Y-%m-%d")
+    today = taipei_today()
+    start_date = (today - timedelta(days=140)).strftime("%Y-%m-%d")
     try:
         df, status_code, msg, _retry_after = fetch_finmind_price_frame(
             symbol,
             start_date,
-            datetime.today().strftime("%Y-%m-%d"),
+            today.strftime("%Y-%m-%d"),
             token=token,
             timeout=20,
             sleep_seconds=1.2,
@@ -801,7 +804,7 @@ csv_bytes = dataframe_to_csv_bytes(display_df)
 st.download_button(
     label="下載 CSV",
     data=csv_bytes,
-    file_name=f"成長股篩選_{datetime.today().strftime('%Y%m%d')}.csv",
+    file_name=f"成長股篩選_{taipei_now().strftime('%Y%m%d')}.csv",
     mime="text/csv",
 )
 
