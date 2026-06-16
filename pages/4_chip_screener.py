@@ -214,8 +214,7 @@ def make_chip_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
         "foreign_net_buy_lot": "外資近N日買超(張)",
         "foreign_buy_streak":  "連買天數",
         "pe_ratio":            "本益比(倍)",
-        "pe_label":            "PE口徑",
-    })[["警示標記", "股票代碼", "股票名稱", "市場", "收盤價(元)", "本益比(倍)", "PE口徑",
+    })[["警示標記", "股票代碼", "股票名稱", "市場", "收盤價(元)", "本益比(倍)",
         "外資近N日買超(張)", "連買天數", "當日成交量(張)"]].copy()
 
     display_df["收盤價(元)"] = pd.to_numeric(display_df["收盤價(元)"], errors="coerce").round(2)
@@ -273,7 +272,6 @@ def render_chip_table(display_df: pd.DataFrame) -> None:
     market_col = "市場" if "市場" in display_df.columns else "撣"
     close_col = "收盤價(元)" if "收盤價(元)" in display_df.columns else "?嗥????"
     pe_col = "本益比(倍)" if "本益比(倍)" in display_df.columns else "?祉?瘥???"
-    pe_label_col = "PE口徑" if "PE口徑" in display_df.columns else "PE???"
     foreign_col = "外資近N日買超(張)" if "外資近N日買超(張)" in display_df.columns else "憭?餈?亥眺頞?撘?"
     streak_col = "連買天數" if "連買天數" in display_df.columns else "??眺憭拇"
     volume_col = "當日成交量(張)" if "當日成交量(張)" in display_df.columns else "?嗆?漱??撘?"
@@ -283,16 +281,15 @@ def render_chip_table(display_df: pd.DataFrame) -> None:
         use_container_width=True,
         hide_index=True,
         column_config={
-            alert_col: st.column_config.TextColumn(alert_col, width="medium"),
-            code_col: st.column_config.TextColumn(code_col, width="small"),
-            name_col: st.column_config.TextColumn(name_col, width="medium"),
-            market_col: st.column_config.TextColumn(market_col, width="small"),
-            close_col: st.column_config.NumberColumn(close_col, format="%.2f"),
-            pe_col: st.column_config.NumberColumn(pe_col, format="%.2f"),
-            pe_label_col: st.column_config.TextColumn(pe_label_col, width="medium"),
-            foreign_col: st.column_config.NumberColumn(foreign_col, format="%d"),
-            streak_col: st.column_config.NumberColumn(streak_col, format="%d"),
-            volume_col: st.column_config.NumberColumn(volume_col, format="%d"),
+            alert_col: st.column_config.TextColumn(alert_col, width=132),
+            code_col: st.column_config.TextColumn(code_col, width=74),
+            name_col: st.column_config.TextColumn(name_col, width=108),
+            market_col: st.column_config.TextColumn(market_col, width=64),
+            close_col: st.column_config.NumberColumn(close_col, width=82, format="%.2f"),
+            pe_col: st.column_config.NumberColumn(pe_col, width=84, format="%.2f"),
+            foreign_col: st.column_config.NumberColumn(foreign_col, width=138, format="%d"),
+            streak_col: st.column_config.NumberColumn(streak_col, width=78, format="%d"),
+            volume_col: st.column_config.NumberColumn(volume_col, width=116, format="%d"),
         },
     )
 
