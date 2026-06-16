@@ -624,6 +624,18 @@ section[data-testid="stSidebar"] .stButton > button:hover {
     border-color: #6f86a0 !important;
     color: #ffffff !important;
 }
+section[data-testid="stSidebar"] div[data-testid="stButton"] button[kind="primary"]:disabled,
+section[data-testid="stSidebar"] .stButton > button[kind="primary"]:disabled {
+    background: #fee2e2 !important;
+    border: 2px solid #fb7185 !important;
+    color: #991b1b !important;
+    box-shadow: 0 0 0 3px rgba(251, 113, 133, 0.22) !important;
+    cursor: default !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] button[kind="primary"]:disabled *,
+section[data-testid="stSidebar"] .stButton > button[kind="primary"]:disabled * {
+    color: #991b1b !important;
+}
 section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] *,
 section[data-testid="stSidebar"] div[data-testid="stCaptionContainer"] *,
 section[data-testid="stSidebar"] div[data-testid="stHeading"] * {

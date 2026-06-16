@@ -127,6 +127,7 @@ with st.sidebar:
     st.markdown("**操作**")
     run_btn = st.button("🔍 開始選股", use_container_width=True, type="primary")
     if st.button("🗑️ 清除快取（強制重新抓資料）", use_container_width=True):
+        st.cache_data.clear()
         st.session_state.pop("chip_screener_result", None)
         st.success("✅ 本頁結果已清除，請重新選股")
         st.stop()
@@ -213,8 +214,7 @@ def make_chip_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
         "foreign_net_buy_lot": "外資近N日買超(張)",
         "foreign_buy_streak":  "連買天數",
         "pe_ratio":            "本益比(倍)",
-        "pe_label":            "PE口徑",
-    })[["警示標記", "股票代碼", "股票名稱", "市場", "收盤價(元)", "本益比(倍)", "PE口徑",
+    })[["警示標記", "股票代碼", "股票名稱", "市場", "收盤價(元)", "本益比(倍)",
         "外資近N日買超(張)", "連買天數", "當日成交量(張)"]].copy()
 
     display_df["收盤價(元)"] = pd.to_numeric(display_df["收盤價(元)"], errors="coerce").round(2)
@@ -272,7 +272,6 @@ def render_chip_table(display_df: pd.DataFrame) -> None:
     market_col = "市場" if "市場" in display_df.columns else "撣"
     close_col = "收盤價(元)" if "收盤價(元)" in display_df.columns else "?嗥????"
     pe_col = "本益比(倍)" if "本益比(倍)" in display_df.columns else "?祉?瘥???"
-    pe_label_col = "PE口徑" if "PE口徑" in display_df.columns else "PE???"
     foreign_col = "外資近N日買超(張)" if "外資近N日買超(張)" in display_df.columns else "憭?餈?亥眺頞?撘?"
     streak_col = "連買天數" if "連買天數" in display_df.columns else "??眺憭拇"
     volume_col = "當日成交量(張)" if "當日成交量(張)" in display_df.columns else "?嗆?漱??撘?"
@@ -282,16 +281,15 @@ def render_chip_table(display_df: pd.DataFrame) -> None:
         use_container_width=True,
         hide_index=True,
         column_config={
-            alert_col: st.column_config.TextColumn(alert_col, width="medium"),
-            code_col: st.column_config.TextColumn(code_col, width="small"),
-            name_col: st.column_config.TextColumn(name_col, width="medium"),
-            market_col: st.column_config.TextColumn(market_col, width="small"),
-            close_col: st.column_config.NumberColumn(close_col, format="%.2f"),
-            pe_col: st.column_config.NumberColumn(pe_col, format="%.2f"),
-            pe_label_col: st.column_config.TextColumn(pe_label_col, width="medium"),
-            foreign_col: st.column_config.NumberColumn(foreign_col, format="%d"),
-            streak_col: st.column_config.NumberColumn(streak_col, format="%d"),
-            volume_col: st.column_config.NumberColumn(volume_col, format="%d"),
+            alert_col: st.column_config.TextColumn(alert_col, width=132),
+            code_col: st.column_config.TextColumn(code_col, width=74),
+            name_col: st.column_config.TextColumn(name_col, width=108),
+            market_col: st.column_config.TextColumn(market_col, width=64),
+            close_col: st.column_config.NumberColumn(close_col, width=82, format="%.2f"),
+            pe_col: st.column_config.NumberColumn(pe_col, width=84, format="%.2f"),
+            foreign_col: st.column_config.NumberColumn(foreign_col, width=138, format="%d"),
+            streak_col: st.column_config.NumberColumn(streak_col, width=78, format="%d"),
+            volume_col: st.column_config.NumberColumn(volume_col, width=116, format="%d"),
         },
     )
 
@@ -574,14 +572,23 @@ progress.progress(40, text=f"🏦 查詢 TWSE/TPEX 外資買賣超（近 {days_n
 # 從昨天往前找最近 days_n 個有資料的交易日（跳過週末假日）
 _daily_frames  = []
 _valid_dates   = []
+_inst_fetch_errors = []
 for _i in range(days_n + 15):   # 加足緩衝，防止連續假日
     _d = datetime.today().date() - timedelta(days=_i + 1)
     if _d.weekday() >= 5:          # 跳過週六日
         continue
     _date_ymd = _d.strftime("%Y%m%d")
     _date_roc = f"{_d.year - 1911}/{_d.month:02d}/{_d.day:02d}"
-    _df_tw = fetch_twse_3insti(_date_ymd)
-    _df_tp = fetch_tpex_3insti(_date_roc)
+    try:
+        _df_tw = fetch_twse_3insti(_date_ymd)
+    except Exception as exc:
+        _df_tw = pd.DataFrame()
+        _inst_fetch_errors.append(f"TWSE {_date_ymd}: {exc}")
+    try:
+        _df_tp = fetch_tpex_3insti(_date_roc)
+    except Exception as exc:
+        _df_tp = pd.DataFrame()
+        _inst_fetch_errors.append(f"TPEX {_date_roc}: {exc}")
     if _df_tw.empty and _df_tp.empty:
         continue                    # 該日無資料（假日），跳過
     _valid_dates.append(_d)
@@ -590,6 +597,15 @@ for _i in range(days_n + 15):   # 加足緩衝，防止連續假日
     _daily_frames.append(_daily)
     if len(_valid_dates) >= days_n:
         break
+
+if _inst_fetch_errors:
+    progress.progress(100, text="外資資料來源不完整")
+    st.error("外資買賣超資料讀取不完整，已停止篩選，避免只用部分市場或部分日期產生誤導結果。")
+    st.warning(_inst_fetch_errors[0])
+    with st.expander("查看外資資料讀取錯誤", expanded=False):
+        for _err in _inst_fetch_errors[:12]:
+            st.write(_err)
+    st.stop()
 
 if not _daily_frames:
     progress.progress(100, text="✅ 完成")

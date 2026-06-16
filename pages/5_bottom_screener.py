@@ -218,6 +218,7 @@ with st.sidebar:
     st.markdown("**操作**")
     run_btn = st.button("🔍 開始選股", use_container_width=True, type="primary")
     if st.button("🗑️ 清除快取（強制重新抓資料）", use_container_width=True):
+        st.cache_data.clear()
         st.session_state.pop("bottom_screener_result", None)
         st.success("✅ 本頁結果已清除，請重新選股")
         st.stop()
@@ -317,18 +318,18 @@ def render_bottom_table(display_df: pd.DataFrame) -> None:
         use_container_width=True,
         hide_index=True,
         column_config={
-            alert_col: st.column_config.TextColumn(alert_col, width="medium"),
-            code_col: st.column_config.TextColumn(code_col, width="small"),
-            name_col: st.column_config.TextColumn(name_col, width="medium"),
-            market_col: st.column_config.TextColumn(market_col, width="small"),
-            close_col: st.column_config.NumberColumn(close_col, format="%.2f"),
-            support_col: st.column_config.NumberColumn(support_col, format="%.2f"),
-            support_date_col: st.column_config.TextColumn(support_date_col, width="small"),
-            rebound_col: st.column_config.NumberColumn(rebound_col, format="%.2f"),
-            volume_col: st.column_config.NumberColumn(volume_col, format="%d"),
-            revenue_col: st.column_config.NumberColumn(revenue_col, format="%.2f"),
-            rev_month_col: st.column_config.TextColumn(rev_month_col, width="small"),
-            history_col: st.column_config.NumberColumn(history_col, format="%d"),
+            alert_col: st.column_config.TextColumn(alert_col, width=146),
+            code_col: st.column_config.TextColumn(code_col, width=74),
+            name_col: st.column_config.TextColumn(name_col, width=108),
+            market_col: st.column_config.TextColumn(market_col, width=64),
+            close_col: st.column_config.NumberColumn(close_col, width=92, format="%.2f"),
+            support_col: st.column_config.NumberColumn(support_col, width=124, format="%.2f"),
+            support_date_col: st.column_config.TextColumn(support_date_col, width=96),
+            rebound_col: st.column_config.NumberColumn(rebound_col, width=116, format="%.2f"),
+            volume_col: st.column_config.NumberColumn(volume_col, width=130, format="%d"),
+            revenue_col: st.column_config.NumberColumn(revenue_col, width=138, format="%.2f"),
+            rev_month_col: st.column_config.TextColumn(rev_month_col, width=104),
+            history_col: st.column_config.NumberColumn(history_col, width=104, format="%d"),
         },
     )
 
