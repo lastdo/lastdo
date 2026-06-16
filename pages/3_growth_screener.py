@@ -49,7 +49,7 @@ RESULT_VIEW_OPTIONS = ["標記說明", "明細表", "診斷與資料"]
 # ------------------------------
 st.set_page_config(page_title="成長股篩選", page_icon="📈", layout="wide")
 
-from render_layer.style import apply_style, page_header, render_global_navigation
+from render_layer.style import apply_style, page_header, render_global_navigation, render_meta_strip
 apply_style()
 page_header("📈", "成長股篩選", "從營收成長、成交量、股價與官方本益比找出合理估值的成長股。")
 
@@ -81,21 +81,28 @@ def render_page_positioning() -> None:
             """
         )
 
-
-render_page_positioning()
-st.caption("本頁優先判斷成長趨勢是否延續、價格是否先跑，避免把單月營收異常當成成長確認。")
-
-
 def render_strategy_card() -> None:
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("策略核心", "成長延續")
-    col2.metric("價格紀律", f"季線溢價 < {SEASON_LINE_MAX_PREMIUM * 100:.0f}%")
-    col3.metric("資料主體", "官方 API")
-    col4.metric("最終驗證", "FinMind 季線")
+    render_meta_strip([
+        {"label": "策略核心", "value": "成長延續", "sub": "找延續中的基本面動能"},
+        {"label": "價格紀律", "value": f"季線溢價 < {SEASON_LINE_MAX_PREMIUM * 100:.0f}%", "sub": "避免價格過度透支"},
+        {"label": "資料主體", "value": "官方 API", "sub": "TWSE / TPEX / MOPS"},
+        {"label": "最終驗證", "value": "FinMind 季線", "sub": "用 MA60 做最後過濾"},
+    ])
     st.caption("先用官方營收、成交量、股價與 PE 做主篩，再用季線限制避免價格過度透支。")
 
 
-render_strategy_card()
+def render_strategy_overview() -> None:
+    st.caption(
+        f"策略摘要：成長延續、官方 PE 篩選、近 2 月平均營收年增門檻，"
+        f"並限制收盤價高於 MA60 的幅度不超過 {SEASON_LINE_MAX_PREMIUM * 100:.0f}%。"
+    )
+    with st.expander("查看策略說明", expanded=False):
+        render_page_positioning()
+        st.caption("本頁優先判斷成長趨勢是否延續、價格是否先跑，避免把單月營收異常當成成長確認。")
+        render_strategy_card()
+
+
+render_strategy_overview()
 
 # ------------------------------
 # 側邊欄條件
@@ -131,6 +138,7 @@ with st.sidebar:
     st.markdown("**操作**")
     run_btn = st.button("執行篩選", use_container_width=True, type="primary")
     if st.button("清除快取並重新整理", use_container_width=True):
+        st.cache_data.clear()
         st.session_state.pop("screener_result", None)
         st.success("本頁結果已清除，請重新執行篩選。")
         st.stop()
@@ -223,7 +231,6 @@ def make_growth_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
         "market": "市場",
         "close": "收盤價",
         "pe_ratio": "本益比",
-        "pe_label": "PE口徑",
         "vol_lot": "成交量(張)",
         "avg_rev_yoy": "近2月平均營收年增(%)",
         "rev_months": "營收月份",
@@ -231,7 +238,7 @@ def make_growth_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
         "rev_ly": "去年同月營收",
         "rev_ym": "最新營收月份",
     })[[
-        "警示標記", "股票代號", "股票名稱", "市場", "收盤價", "本益比", "PE口徑",
+        "警示標記", "股票代號", "股票名稱", "市場", "收盤價", "本益比",
         "近2月平均營收年增(%)", "營收月份", "成交量(張)", "當月營收", "去年同月營收", "最新營收月份",
     ]].copy()
 
@@ -249,42 +256,58 @@ def render_growth_alert_summary(display_df: pd.DataFrame) -> None:
         return
 
     flattened = "｜".join(display_df["警示標記"].astype(str).tolist())
-    col0, col1, col2, col3, col4, col5 = st.columns(6)
-    col0.metric("基期效應", flattened.count("基期效應"))
-    col0.caption("avg/latest/prev >= max(門檻×4, 200)")
-    col1.metric("趨勢續強", flattened.count("趨勢續強"))
-    col1.caption("近2月高成長，且雙月落差 <= 20")
-    col2.metric("成長失真", flattened.count("成長失真"))
-    col2.caption("|latest - prev| >= 35")
-    col3.metric("獲利未跟上", flattened.count("獲利未跟上"))
-    col3.caption("高成長，但 PE >= max(上限×0.75, 18)")
-    col4.metric("估值過熱", flattened.count("估值過熱"))
-    col4.caption("PE >= max(上限×0.9, 18) 且 PE > 營收年增×0.8")
-    col5.metric("價格領先", flattened.count("價格領先"))
-    col5.caption("季線溢價 >= 8%，且 latest <= prev + 5")
+    summary_df = pd.DataFrame(
+        [
+            ("基期效應", flattened.count("基期效應"), "avg/latest/prev >= max(門檻×4, 200)"),
+            ("趨勢續強", flattened.count("趨勢續強"), "近2月高成長，且雙月落差 <= 20"),
+            ("成長失真", flattened.count("成長失真"), "|latest - prev| >= 35"),
+            ("獲利未跟上", flattened.count("獲利未跟上"), "高成長，但 PE >= max(上限×0.75, 18)"),
+            ("估值過熱", flattened.count("估值過熱"), "PE >= max(上限×0.9, 18) 且 PE > 營收年增×0.8"),
+            ("價格領先", flattened.count("價格領先"), "季線溢價 >= 8%，且 latest <= prev + 5"),
+        ],
+        columns=["標記", "檔數", "判斷重點"],
+    )
+    st.dataframe(
+        summary_df,
+        use_container_width=True,
+        hide_index=True,
+        height=250,
+        column_config={
+            "標記": st.column_config.TextColumn("標記", width=92),
+            "檔數": st.column_config.NumberColumn("檔數", width=58, format="%d"),
+            "判斷重點": st.column_config.TextColumn("判斷重點", width="large"),
+        },
+    )
 
 
 def render_growth_tag_explainer(pe_max: float, rev_growth_min: float) -> None:
-    st.markdown(
-        f"""
-**標記說明（實際邏輯）**
-
-- 先通過主條件後才會進入名單：
-  - 本益比 `< {pe_max:.0f}`、近2月平均營收年增 `> {rev_growth_min:.0f}%`
-  - 成交量、股價門檻依左側設定
-  - 季線限制：收盤價不可高於 MA60 的 12%
-
-| 標記 | 觸發條件（對應程式） |
-|---|---|
-| 基期效應 | `avg/latest/prev_rev_yoy >= max(門檻×4, 200)` |
-| 趨勢續強 | `avg_rev_yoy >= max(門檻+10, 30)` 且 `latest_rev_yoy > 0` 且 `prev_rev_yoy > 0` 且 `|latest-prev| <= 20` |
-| 成長失真 | `|latest_rev_yoy - prev_rev_yoy| >= 35` |
-| 獲利未跟上 | `avg_rev_yoy >= max(門檻, 20)` 且 `pe_ratio >= max(PE上限×0.75, 18)` |
-| 估值過熱 | `pe_ratio >= max(PE上限×0.9, 18)` 且 `pe_ratio > avg_rev_yoy × 0.8` |
-| 價格領先 | `season_line_premium >= 8%` 且 `latest_rev_yoy <= prev_rev_yoy + 5` |
-| 未觸發警示 | 以上標記皆未觸發 |
-"""
+    st.caption(
+        f"主條件：本益比 < {pe_max:.0f}、近2月平均營收年增 > {rev_growth_min:.0f}%、"
+        "成交量與股價門檻依左側設定、收盤價不可高於 MA60 的 12%。"
     )
+    with st.expander("完整標記規則", expanded=False):
+        rule_df = pd.DataFrame(
+            [
+                ("基期效應", "avg/latest/prev_rev_yoy >= max(門檻×4, 200)"),
+                ("趨勢續強", "avg_rev_yoy >= max(門檻+10, 30)，且 latest/prev > 0，雙月落差 <= 20"),
+                ("成長失真", "|latest_rev_yoy - prev_rev_yoy| >= 35"),
+                ("獲利未跟上", "avg_rev_yoy >= max(門檻, 20)，且 pe_ratio >= max(PE上限×0.75, 18)"),
+                ("估值過熱", "pe_ratio >= max(PE上限×0.9, 18)，且 pe_ratio > avg_rev_yoy × 0.8"),
+                ("價格領先", "season_line_premium >= 8%，且 latest_rev_yoy <= prev_rev_yoy + 5"),
+                ("未觸發警示", "以上標記皆未觸發"),
+            ],
+            columns=["標記", "觸發條件"],
+        )
+        st.dataframe(
+            rule_df,
+            use_container_width=True,
+            hide_index=True,
+            height=282,
+            column_config={
+                "標記": st.column_config.TextColumn("標記", width=96),
+                "觸發條件": st.column_config.TextColumn("觸發條件", width="large"),
+            },
+        )
     st.caption("欄位對應：latest/prev 為最近兩個營收月份年增率。若僅有單月資料，該類雙月比較標記不會觸發。")
 
 
@@ -294,18 +317,18 @@ def render_growth_table(display_df: pd.DataFrame) -> None:
         use_container_width=True,
         hide_index=True,
         column_config={
-            "警示標記": st.column_config.TextColumn("警示標記", width="medium"),
-            "股票代號": st.column_config.TextColumn("股票代號", width="small"),
-            "股票名稱": st.column_config.TextColumn("股票名稱", width="medium"),
-            "市場": st.column_config.TextColumn("市場", width="small"),
-            "收盤價": st.column_config.NumberColumn("收盤價", format="%.2f"),
-            "本益比": st.column_config.NumberColumn("本益比", format="%.2f"),
-            "PE口徑": st.column_config.TextColumn("PE口徑", width="medium"),
-            "近2月平均營收年增(%)": st.column_config.NumberColumn("近2月平均營收年增(%)", format="%.2f%%"),
-            "營收月份": st.column_config.TextColumn("營收月份", width="medium"),
-            "成交量(張)": st.column_config.NumberColumn("成交量(張)", format="%d"),
-            "當月營收": st.column_config.NumberColumn("當月營收", format="%d"),
-            "去年同月營收": st.column_config.NumberColumn("去年同月營收", format="%d"),
+            "警示標記": st.column_config.TextColumn("警示標記", width=154),
+            "股票代號": st.column_config.TextColumn("股票代號", width=74),
+            "股票名稱": st.column_config.TextColumn("股票名稱", width=112),
+            "市場": st.column_config.TextColumn("市場", width=64),
+            "收盤價": st.column_config.NumberColumn("收盤價", width=78, format="%.2f"),
+            "本益比": st.column_config.NumberColumn("本益比", width=70, format="%.2f"),
+            "近2月平均營收年增(%)": st.column_config.NumberColumn("近2月平均營收年增(%)", width=142, format="%.2f%%"),
+            "營收月份": st.column_config.TextColumn("營收月份", width=96),
+            "成交量(張)": st.column_config.NumberColumn("成交量(張)", width=94, format="%d"),
+            "當月營收": st.column_config.NumberColumn("當月營收", width=112, format="%d"),
+            "去年同月營收": st.column_config.NumberColumn("去年同月營收", width=122, format="%d"),
+            "最新營收月份": st.column_config.TextColumn("最新營收月份", width=104),
         },
     )
 

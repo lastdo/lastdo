@@ -39,6 +39,8 @@ def render_watchlist_adder(
     action_df = result_df[select_columns].copy()
     for column in numeric_columns:
         action_df[column] = pd.to_numeric(action_df[column], errors="coerce")
+    if "close" in action_df.columns:
+        action_df = action_df.sort_values("close", ascending=False, na_position="last").reset_index(drop=True)
     action_df["label"] = action_df.apply(label_builder, axis=1)
 
     options = action_df.to_dict("records")
