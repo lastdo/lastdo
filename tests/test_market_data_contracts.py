@@ -107,6 +107,27 @@ class MarketDataContractTests(unittest.TestCase):
 
         self.assertEqual(df["rev_ym"].tolist(), ["11502", "11501"])
 
+    def test_fetch_mops_month_revenue_exposes_source_errors(self):
+        class FakeFetcher:
+            def get_market_revenue(self, year, month, market, company_type):
+                raise RuntimeError("primary failed")
+
+        with patch("data_layer.mops_revenue.RevenueFetcher", return_value=FakeFetcher()):
+            with patch(
+                "data_layer.mops_revenue._fetch_market_revenue_with_redirects",
+                side_effect=RuntimeError("fallback failed"),
+            ):
+                df = mops_revenue.fetch_mops_month_revenue_frame(
+                    115,
+                    5,
+                    markets=("sii",),
+                    company_types=(0,),
+                )
+
+        self.assertTrue(df.empty)
+        self.assertIn("primary failed", "\n".join(df.attrs.get("mops_errors", [])))
+        self.assertIn("fallback failed", "\n".join(df.attrs.get("mops_errors", [])))
+
     def test_build_price_snapshot_normalizes_twse_and_tpex(self):
         raw_twse = [
             {

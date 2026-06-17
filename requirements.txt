@@ -1,6 +1,9 @@
 streamlit==1.55.0
 requests==2.33.0
 pandas==2.3.3
+lxml>=5.2.0
+beautifulsoup4>=4.12.0
+html5lib>=1.1
 plotly==6.6.0
 twmops==0.1.2
 anthropic==0.86.0

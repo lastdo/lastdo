@@ -16,6 +16,13 @@ MOPS_COMPANY_TYPES = (0, 1)
 MOPS_REVENUE_COLUMNS = ["stock_id", "rev_ym", "rev_yoy", "rev_cur", "rev_ly"]
 
 
+def _empty_revenue_frame(errors: list[str] | None = None) -> pd.DataFrame:
+    df = pd.DataFrame(columns=MOPS_REVENUE_COLUMNS)
+    if errors:
+        df.attrs["mops_errors"] = errors[:30]
+    return df
+
+
 def latest_revenue_ym(today: date | datetime | None = None) -> str:
     """Return the most recent complete revenue month in ROC yyyMM format."""
     current = today.date() if isinstance(today, datetime) else today
@@ -130,12 +137,13 @@ def fetch_mops_month_revenue_frame(
     fetcher = RevenueFetcher()
     ym = f"{int(roc_year)}{int(month):02d}"
     frames: list[pd.DataFrame] = []
+    errors: list[str] = []
 
     for market in markets:
         for company_type in company_types:
             try:
                 raw = fetcher.get_market_revenue(int(roc_year), int(month), str(market), int(company_type))
-            except Exception:
+            except Exception as primary_exc:
                 try:
                     raw = _fetch_market_revenue_with_redirects(
                         fetcher,
@@ -144,22 +152,33 @@ def fetch_mops_month_revenue_frame(
                         str(market),
                         int(company_type),
                     )
-                except Exception:
+                except Exception as fallback_exc:
+                    errors.append(
+                        f"{ym} {market}/{company_type}: "
+                        f"primary {type(primary_exc).__name__}: {primary_exc}; "
+                        f"fallback {type(fallback_exc).__name__}: {fallback_exc}"
+                    )
                     continue
             frame = _normalize_revenue_frame(raw, str(market), int(company_type), ym)
             if not frame.empty:
                 frames.append(frame)
+            else:
+                errors.append(f"{ym} {market}/{company_type}: empty or missing expected columns")
 
     if not frames:
-        return pd.DataFrame(columns=MOPS_REVENUE_COLUMNS)
+        return _empty_revenue_frame(errors)
 
     result = pd.concat(frames, ignore_index=True)
-    return result.drop_duplicates(subset=["stock_id", "rev_ym"], keep="first").reset_index(drop=True)
+    result = result.drop_duplicates(subset=["stock_id", "rev_ym"], keep="first").reset_index(drop=True)
+    if errors:
+        result.attrs["mops_errors"] = errors[:30]
+    return result
 
 
 def fetch_mops_recent_revenue_frame(latest_ym: str | None = None, months: int = 1) -> pd.DataFrame:
     ym = latest_ym or latest_revenue_ym()
     month_frames: list[pd.DataFrame] = []
+    errors: list[str] = []
     target_months = max(int(months), 1)
     max_scan_months = target_months + 6
 
@@ -167,6 +186,7 @@ def fetch_mops_recent_revenue_frame(latest_ym: str | None = None, months: int = 
         if not ym:
             break
         frame = fetch_mops_month_revenue_frame(int(ym[:3]), int(ym[3:]))
+        errors.extend(str(error) for error in frame.attrs.get("mops_errors", []))
         if not frame.empty:
             month_frames.append(frame)
             if len(month_frames) >= target_months:
@@ -174,6 +194,9 @@ def fetch_mops_recent_revenue_frame(latest_ym: str | None = None, months: int = 
         ym = previous_revenue_ym(ym)
 
     if not month_frames:
-        return pd.DataFrame(columns=MOPS_REVENUE_COLUMNS)
+        return _empty_revenue_frame(errors)
 
-    return pd.concat(month_frames, ignore_index=True).reset_index(drop=True)
+    result = pd.concat(month_frames, ignore_index=True).reset_index(drop=True)
+    if errors:
+        result.attrs["mops_errors"] = errors[:30]
+    return result
