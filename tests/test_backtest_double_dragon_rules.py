@@ -9,7 +9,12 @@ from backtest_common.double_dragon_rules import (
     latest_complete_revenue_ym,
     price_window_start,
 )
-from backtest_data_layer.double_dragon_snapshot import load_candidate_universe
+from backtest_data_layer.double_dragon_snapshot import (
+    SnapshotDiagnostics,
+    build_double_dragon_snapshot,
+    load_candidate_universe,
+)
+from backtest_render_layer.double_dragon_tables import DISPLAY_COLUMNS
 
 
 def test_revenue_month_uses_generic_as_of_date():
@@ -102,3 +107,77 @@ def test_candidate_universe_filters_price_volume_before_revenue_join():
     assert diagnostics.price_rows == 3
     assert diagnostics.price_volume_candidates == 1
     assert diagnostics.revenue_candidates == 1
+
+
+def test_snapshot_returns_only_common_passed_rows():
+    universe = pd.DataFrame(
+        {
+            "stock_id": ["1111", "2222"],
+            "stock_name": ["A", "B"],
+            "market": ["TWSE", "TWSE"],
+            "close": [120.0, 120.0],
+            "vol_lot": [1500.0, 1500.0],
+            "price_date": ["2026-03-18", "2026-03-18"],
+            "avg_rev_yoy": [30.0, 30.0],
+            "rev_months": ["11501/11412", "11501/11412"],
+            "rev_ym": ["11501", "11501"],
+            "rev_yoy": [30.0, 30.0],
+            "rev_cur": [100, 100],
+            "rev_ly": [80, 80],
+            "latest_rev_yoy": [30.0, 30.0],
+            "prev_rev_yoy": [30.0, 30.0],
+        }
+    )
+    diagnostics = SnapshotDiagnostics(
+        stock_count=2,
+        price_rows=2,
+        price_volume_candidates=2,
+        revenue_month_start="11502",
+        revenue_rows=2,
+        revenue_candidates=2,
+        common_passed=0,
+        common_failed=0,
+        processed=0,
+        price_failed=(),
+        eps_failed=(),
+    )
+
+    def fake_build(row, as_of_date, token):
+        eps = 6.0 if row["stock_id"] == "1111" else 4.0
+        return (
+            "ok",
+            {
+                "as_of_date": "2026-03-18",
+                "stock_id": row["stock_id"],
+                "stock_name": row["stock_name"],
+                "market": row["market"],
+                "price_date": row["price_date"],
+                "close": row["close"],
+                "vol_lot": row["vol_lot"],
+                "ma60": 100.0,
+                "six_month_low": 100.0,
+                "six_month_low_date": "2026-01-01",
+                "ma60_premium_pct": 20.0,
+                "low_premium_pct": 20.0,
+                "history_days": 120,
+                "avg_rev_yoy": row["avg_rev_yoy"],
+                "rev_months": row["rev_months"],
+                "ttm_eps": eps,
+                "eps_quarters": "q1/q2/q3/q4",
+                "pe_ratio": row["close"] / eps,
+            },
+        )
+
+    with patch("backtest_data_layer.double_dragon_snapshot.load_candidate_universe", return_value=(universe, diagnostics)):
+        with patch("backtest_data_layer.double_dragon_snapshot._build_stock_snapshot", side_effect=fake_build):
+            snapshot, result_diagnostics = build_double_dragon_snapshot(date(2026, 3, 18))
+
+    assert snapshot["stock_id"].tolist() == ["1111"]
+    assert result_diagnostics.common_passed == 1
+    assert result_diagnostics.common_failed == 1
+
+
+def test_display_columns_do_not_expose_internal_booleans():
+    assert "is_common_pass" not in DISPLAY_COLUMNS
+    assert "is_dragon_rise_pass" not in DISPLAY_COLUMNS
+    assert "is_dragon_hidden_pass" not in DISPLAY_COLUMNS

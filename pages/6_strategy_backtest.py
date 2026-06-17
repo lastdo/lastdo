@@ -37,7 +37,6 @@ def _result_key(as_of_date, max_targets: int) -> str:
 
 
 def render_summary(df_snapshot: pd.DataFrame, diagnostics: SnapshotDiagnostics) -> None:
-    common_count = int(df_snapshot["is_common_pass"].sum()) if "is_common_pass" in df_snapshot.columns else 0
     dragon_count = int(df_snapshot["is_dragon_rise_pass"].sum()) if "is_dragon_rise_pass" in df_snapshot.columns else 0
     hidden_count = int(df_snapshot["is_dragon_hidden_pass"].sum()) if "is_dragon_hidden_pass" in df_snapshot.columns else 0
     unique_count = (
@@ -47,7 +46,7 @@ def render_summary(df_snapshot: pd.DataFrame, diagnostics: SnapshotDiagnostics) 
     )
 
     col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("共用池", f"{common_count} 檔")
+    col1.metric("共用條件通過", f"{diagnostics.common_passed} 檔")
     col2.metric("龍騰升空", f"{dragon_count} 檔")
     col3.metric("潛龍在淵", f"{hidden_count} 檔")
     col4.metric("雙龍不重複", f"{unique_count} 檔")
@@ -62,6 +61,8 @@ def render_diagnostics(diagnostics: SnapshotDiagnostics) -> None:
             {"項目": "MOPS 起始月份", "數值": diagnostics.revenue_month_start, "說明": "由基準日前一個完整月份往前掃描"},
             {"項目": "MOPS 原始筆數", "數值": diagnostics.revenue_rows, "說明": "近月營收原始列數"},
             {"項目": "FinMind候選", "數值": diagnostics.revenue_candidates, "說明": "價量池 ∩ 近兩個非二月月份 YoY 平均 >= 20%"},
+            {"項目": "共用條件通過", "數值": diagnostics.common_passed, "說明": "價量、營收、近四季 EPS 全部通過"},
+            {"項目": "共用條件未通過", "數值": diagnostics.common_failed, "說明": "已完成 FinMind 查詢但 EPS 等共用門檻未通過"},
             {"項目": "價格失敗", "數值": len(diagnostics.price_failed), "說明": ", ".join(diagnostics.price_failed[:12])},
             {"項目": "EPS失敗", "數值": len(diagnostics.eps_failed), "說明": ", ".join(diagnostics.eps_failed[:12])},
         ]
@@ -152,10 +153,9 @@ if diagnostics.rate_limit_error:
     st.warning("FinMind 查詢受限，本次資料池不完整，請稍後重跑或提供 Token。")
 
 if df_snapshot.empty:
-    st.warning("本次沒有可呈現的完整資料列。請先查看資料重建診斷，確認是條件沒有通過，還是資料來源抓取不足。")
+    st.warning("本次沒有股票通過雙龍吐珠共用條件。請先查看資料重建診斷，確認是條件未通過，還是資料來源抓取不足。")
     st.stop()
 
-common_df = df_snapshot[df_snapshot["is_common_pass"]].copy()
 dragon_df = df_snapshot[df_snapshot["is_dragon_rise_pass"]].copy()
 hidden_df = df_snapshot[df_snapshot["is_dragon_hidden_pass"]].copy()
 combined_df = pd.concat(
@@ -166,7 +166,7 @@ combined_df = pd.concat(
     ignore_index=True,
 ).sort_values("close", ascending=False)
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["龍騰升空", "潛龍在淵", "雙龍合併", "共用池", "稽核明細"])
+tab1, tab2, tab3, tab4 = st.tabs(["龍騰升空", "潛龍在淵", "雙龍合併", "基準日明細"])
 date_token = pd.to_datetime(as_of_date).strftime("%Y%m%d")
 
 with tab1:
@@ -182,12 +182,8 @@ with tab3:
     render_download(display_df, "下載雙龍合併 CSV", f"雙龍吐珠合併_{date_token}.csv")
 
 with tab4:
-    display_df = render_snapshot_table(common_df)
-    render_download(display_df, "下載共用池 CSV", f"雙龍共用池_{date_token}.csv")
-
-with tab5:
     display_df = render_snapshot_table(df_snapshot, include_audit=True)
-    render_download(display_df, "下載稽核明細 CSV", f"雙龍稽核明細_{date_token}.csv")
+    render_download(display_df, "下載基準日明細 CSV", f"雙龍基準日明細_{date_token}.csv")
 
 st.caption(
     f"資料重建時間：{taipei_now().strftime('%Y-%m-%d %H:%M:%S')}。"

@@ -37,6 +37,8 @@ class SnapshotDiagnostics:
     revenue_month_start: str
     revenue_rows: int
     revenue_candidates: int
+    common_passed: int
+    common_failed: int
     processed: int
     price_failed: tuple[str, ...]
     eps_failed: tuple[str, ...]
@@ -84,6 +86,8 @@ def load_candidate_universe(
             revenue_month_start=latest_ym,
             revenue_rows=revenue_rows,
             revenue_candidates=0,
+            common_passed=0,
+            common_failed=0,
             processed=0,
             price_failed=(),
             eps_failed=(),
@@ -99,6 +103,8 @@ def load_candidate_universe(
         revenue_month_start=latest_ym,
         revenue_rows=revenue_rows,
         revenue_candidates=len(df_universe),
+        common_passed=0,
+        common_failed=0,
         processed=0,
         price_failed=(),
         eps_failed=(),
@@ -237,8 +243,14 @@ def build_double_dragon_snapshot(
                 break
 
     df_snapshot = pd.DataFrame(rows)
+    common_passed = 0
+    common_failed = 0
     if not df_snapshot.empty:
         df_snapshot = apply_double_dragon_flags(df_snapshot, thresholds)
+        common_passed = int(df_snapshot["is_common_pass"].sum())
+        common_failed = int((~df_snapshot["is_common_pass"]).sum())
+        df_snapshot = df_snapshot[df_snapshot["is_common_pass"]].copy()
+        df_snapshot["branch_label"] = df_snapshot.apply(_branch_label, axis=1)
         df_snapshot = df_snapshot.sort_values("close", ascending=False).reset_index(drop=True)
 
     diagnostics = SnapshotDiagnostics(
@@ -248,9 +260,20 @@ def build_double_dragon_snapshot(
         revenue_month_start=base_diagnostics.revenue_month_start,
         revenue_rows=base_diagnostics.revenue_rows,
         revenue_candidates=len(df_targets),
+        common_passed=common_passed,
+        common_failed=common_failed,
         processed=done_count,
         price_failed=tuple(price_failed[:30]),
         eps_failed=tuple(eps_failed[:30]),
         rate_limit_error=rate_limit_error,
     )
     return df_snapshot, diagnostics
+
+
+def _branch_label(row: pd.Series) -> str:
+    labels = []
+    if bool(row.get("is_dragon_rise_pass")):
+        labels.append("龍騰升空")
+    if bool(row.get("is_dragon_hidden_pass")):
+        labels.append("潛龍在淵")
+    return "/".join(labels) if labels else "未進分支"

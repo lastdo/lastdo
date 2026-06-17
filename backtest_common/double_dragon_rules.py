@@ -200,27 +200,4 @@ def apply_double_dragon_flags(
         & (result["close"] <= result["six_month_low"] * (1 + thresholds.hidden_dragon_low_max_premium))
         & (result["pe_ratio"] <= thresholds.hidden_dragon_pe_max)
     )
-    result["fail_reason"] = result.apply(lambda row: build_fail_reason(row, thresholds), axis=1)
     return result
-
-
-def build_fail_reason(row: pd.Series, thresholds: DoubleDragonThresholds = DEFAULT_THRESHOLDS) -> str:
-    reasons = []
-    checks = [
-        ("close", row.get("close"), "no_price", lambda value: value > thresholds.price_min, "price"),
-        ("vol_lot", row.get("vol_lot"), "no_volume", lambda value: value > thresholds.vol_lot_min, "volume"),
-        ("avg_rev_yoy", row.get("avg_rev_yoy"), "no_revenue", lambda value: value >= thresholds.avg_rev_yoy_min, "revenue"),
-        ("ttm_eps", row.get("ttm_eps"), "no_eps", lambda value: value >= thresholds.ttm_eps_min, "eps"),
-    ]
-    for _name, raw_value, missing_reason, validator, failed_reason in checks:
-        value = pd.to_numeric(raw_value, errors="coerce")
-        if pd.isna(value):
-            reasons.append(missing_reason)
-        elif not validator(float(value)):
-            reasons.append(failed_reason)
-
-    if reasons:
-        return ",".join(reasons)
-    if bool(row.get("is_dragon_rise_pass")) or bool(row.get("is_dragon_hidden_pass")):
-        return ""
-    return "strategy"

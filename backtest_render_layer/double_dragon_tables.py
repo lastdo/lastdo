@@ -10,6 +10,7 @@ DISPLAY_COLUMNS = {
     "as_of_date": "基準日",
     "stock_id": "股票代號",
     "stock_name": "股票名稱",
+    "branch_label": "入選分支",
     "market": "市場",
     "price_date": "價格日期",
     "close": "收盤價",
@@ -24,10 +25,6 @@ DISPLAY_COLUMNS = {
     "six_month_low": "六個月最低價",
     "six_month_low_date": "最低價日期",
     "low_premium_pct": "低點溢價(%)",
-    "is_common_pass": "共用條件",
-    "is_dragon_rise_pass": "龍騰升空",
-    "is_dragon_hidden_pass": "潛龍在淵",
-    "fail_reason": "落選原因",
 }
 
 
@@ -41,6 +38,7 @@ def make_display_df(df: pd.DataFrame, include_audit: bool = False) -> pd.DataFra
             "as_of_date",
             "stock_id",
             "stock_name",
+            "branch_label",
             "market",
             "price_date",
             "close",
