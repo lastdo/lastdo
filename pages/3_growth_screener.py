@@ -513,11 +513,13 @@ latest_rev = latest_revenue_ym()
 progress.progress(26, text=f"正在下載 MOPS 月營收（{latest_rev} 起近 4 個月）...")
 try:
     df_rev = fetch_mops_recent_revenue(latest_rev, months=4)
+    mops_detail = "\n".join(str(error) for error in df_rev.attrs.get("mops_errors", []))
     data_diagnostics.append(
         DataSourceDiagnostic(
             source="MOPS 月營收",
             status=STATUS_COMPLETE if not df_rev.empty else STATUS_FAILED,
             message="抓取成功。" if not df_rev.empty else "MOPS 月營收回傳空資料。",
+            detail=mops_detail,
             records=len(df_rev),
         )
     )
