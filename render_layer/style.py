@@ -792,6 +792,7 @@ def render_global_navigation(current_page: str) -> None:
         ("app_tw", "AI 台股分析", "pages/1_app_tw.py"),
         ("analysis_history", "分析紀錄", "pages/2_analysis_history.py"),
         ("growth_screener", "雙龍吐珠", "pages/3_growth_screener.py"),
+        ("strategy_backtest", "雙龍吐珠策略回測", "pages/6_strategy_backtest.py"),
     ]
 
     labels = {
@@ -799,6 +800,7 @@ def render_global_navigation(current_page: str) -> None:
         "app_tw": "AI 台股分析",
         "analysis_history": "分析紀錄",
         "growth_screener": "雙龍吐珠",
+        "strategy_backtest": "雙龍吐珠策略回測",
     }
 
     st.header("功能導覽")
