@@ -1,10 +1,12 @@
 import re
-import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-import streamlit as st
-import pandas as pd
 from datetime import timedelta
+
+import pandas as pd
+import streamlit as st
 from dotenv import load_dotenv
+
+from data_layer.app_common import get_runtime_secret
 from data_layer.data_diagnostics import (
     DataSourceDiagnostic,
     STATUS_COMPLETE,
@@ -12,477 +14,52 @@ from data_layer.data_diagnostics import (
     fetch_json_with_diagnostic,
     make_finmind_diagnostic,
 )
-from data_layer.app_common import get_runtime_secret
-from data_layer.time_utils import taipei_now, taipei_today
-from data_layer.finmind_api import (
-    fetch_finmind_price_frame,
-    fetch_finmind_result,
-    parse_price_dataframe,
-    get_status_code,
-)
 from data_layer.export_utils import dataframe_to_csv_bytes
-from data_layer.market_data import (
-    build_price_snapshot,
-    build_recent_revenue_metrics,
-)
-from data_layer.mops_revenue import fetch_mops_recent_revenue_frame, latest_revenue_ym
+from data_layer.finmind_api import fetch_finmind_price_frame
 from data_layer.market_api import (
     fetch_json_tpex as fetch_json_tpex_base,
     fetch_latest_twse_price_rows,
 )
+from data_layer.market_data import build_price_snapshot
+from data_layer.mops_revenue import fetch_mops_recent_revenue_frame, latest_revenue_ym
 from data_layer.portfolio_store import get_default_family_id
 from data_layer.public_valuation import attach_public_valuation, fetch_public_pe_ratios_with_diagnostics
+from data_layer.time_utils import taipei_now, taipei_today
 from render_layer.diagnostics import render_data_diagnostics
-from render_layer.watchlist import format_watchlist_number, render_watchlist_adder as render_watchlist_adder_base
+from render_layer.style import apply_style, page_header, render_global_navigation, render_meta_strip
+from render_layer.watchlist import (
+    format_watchlist_number,
+    render_watchlist_adder as render_watchlist_adder_base,
+)
+
 
 load_dotenv()
 
-# ------------------------------
-# API 與常數
-# ------------------------------
-URL_TPEX_PRICE  = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
-SEASON_LINE_MAX_PREMIUM = 0.12  # 現價最多高於季線 12%
+
+URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 FAMILY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-RESULT_VIEW_OPTIONS = ["標記說明", "明細表", "診斷與資料"]
 
-# ------------------------------
-# 頁面設定
-# ------------------------------
-st.set_page_config(page_title="成長股篩選", page_icon="📈", layout="wide")
+PRICE_MIN = 60.0
+VOL_LOT_MIN = 1000
+AVG_REV_YOY_MIN = 20.0
+TTM_EPS_MIN = 5.0
 
-from render_layer.style import apply_style, page_header, render_global_navigation, render_meta_strip
+DRAGON_PE_MAX = 30.0
+DRAGON_MA60_MAX_PREMIUM = 0.30
+HIDDEN_DRAGON_PE_MAX = 20.0
+HIDDEN_DRAGON_LOW_MAX_PREMIUM = 0.20
+HISTORY_MONTHS = 6
+
+
+st.set_page_config(page_title="雙龍吐珠", page_icon="🐉", layout="wide")
 apply_style()
-page_header("📈", "成長股篩選", "從營收成長、成交量、股價與官方本益比找出合理估值的成長股。")
+page_header(
+    "🐉",
+    "雙龍吐珠",
+    "龍騰升空看季線突破，潛龍在淵看六個月低點附近的基本面轉強。",
+)
 
 
-def render_page_positioning() -> None:
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown(
-            """
-            **這頁看什麼**
-
-            找出營收趨勢仍在延續、估值尚未完全失控，且股價沒有過度透支基本面的成長型股票。
-            """
-        )
-    with col2:
-        st.markdown(
-            """
-            **適合什麼情境**
-
-            適合先從基本面動能中找方向，再檢查估值與價格位置是否仍有中期跟漲空間。
-            """
-        )
-    with col3:
-        st.markdown(
-            """
-            **篩選風格**
-
-            邏輯屬於 **中性偏積極**，重視趨勢延續與估值紀律，不是單看單月營收爆發。
-            """
-        )
-
-def render_strategy_card() -> None:
-    render_meta_strip([
-        {"label": "策略核心", "value": "成長延續", "sub": "找延續中的基本面動能"},
-        {"label": "價格紀律", "value": f"季線溢價 < {SEASON_LINE_MAX_PREMIUM * 100:.0f}%", "sub": "避免價格過度透支"},
-        {"label": "資料主體", "value": "官方 API", "sub": "TWSE / TPEX / MOPS"},
-        {"label": "最終驗證", "value": "FinMind 季線", "sub": "用 MA60 做最後過濾"},
-    ])
-    st.caption("先用官方營收、成交量、股價與 PE 做主篩，再用季線限制避免價格過度透支。")
-
-
-def render_strategy_overview() -> None:
-    st.caption(
-        f"策略摘要：成長延續、官方 PE 篩選、近 2 月平均營收年增門檻，"
-        f"並限制收盤價高於 MA60 的幅度不超過 {SEASON_LINE_MAX_PREMIUM * 100:.0f}%。"
-    )
-    with st.expander("查看策略說明", expanded=False):
-        render_page_positioning()
-        st.caption("本頁優先判斷成長趨勢是否延續、價格是否先跑，避免把單月營收異常當成成長確認。")
-        render_strategy_card()
-
-
-render_strategy_overview()
-
-# ------------------------------
-# 側邊欄條件
-# ------------------------------
-with st.sidebar:
-    render_global_navigation("growth_screener")
-    st.markdown("---")
-    st.markdown("**自選股設定**")
-    st.text_input(
-        "family_id",
-        value=st.session_state.get("inventory_family_id", get_default_family_id()),
-        key="inventory_family_id",
-        help="加入自選股時會寫入這組 family_id，與庫存股頁共用。",
-    )
-    st.divider()
-    st.header("篩選條件")
-    st.divider()
-
-    st.markdown("**資料設定**")
-    finmind_token = st.text_input(
-        "FinMind Token（選填）",
-        value=get_runtime_secret("FINMIND_TOKEN", ""),
-        type="password",
-        help="僅用於查詢季線（MA60）；本益比改採官方上市櫃API。",
-    ).strip()
-
-    st.markdown("**核心條件**")
-    pe_max = st.number_input("本益比上限（倍）", value=20.0, min_value=1.0, max_value=500.0, step=1.0)
-    rev_growth_min = st.number_input("近 2 月平均營收年增下限 (%)", value=20.0, min_value=-100.0, max_value=1000.0, step=1.0)
-    vol_min = st.number_input("成交量下限（張）", value=1000, min_value=0, step=100)
-    price_min = st.number_input("股價下限（元）", value=50.0, min_value=0.0, step=5.0)
-
-    st.markdown("**操作**")
-    run_btn = st.button("執行篩選", use_container_width=True, type="primary")
-    if st.button("清除快取並重新整理", use_container_width=True):
-        st.cache_data.clear()
-        st.session_state.pop("screener_result", None)
-        st.success("本頁結果已清除，請重新執行篩選。")
-        st.stop()
-
-    st.markdown("---")
-    st.markdown("**資料來源**")
-    st.caption("資料來源：股價來自 TWSE + TPEX OpenAPI；月營收來自 MOPS。")
-    st.caption("資料來源：本益比來自官方上市櫃 API。")
-    st.caption("本工具僅供研究參考，投資前請自行評估風險。")
-
-def build_growth_alert_flags(result_df: pd.DataFrame, pe_limit: float, rev_floor: float) -> pd.DataFrame:
-    result_df = result_df.copy()
-
-    def _flags(row: pd.Series) -> str:
-        flags = []
-        avg_rev_yoy = pd.to_numeric(row.get("avg_rev_yoy"), errors="coerce")
-        latest_rev_yoy = pd.to_numeric(row.get("latest_rev_yoy"), errors="coerce")
-        prev_rev_yoy = pd.to_numeric(row.get("prev_rev_yoy"), errors="coerce")
-        pe_ratio = pd.to_numeric(row.get("pe_ratio"), errors="coerce")
-        season_line_premium = pd.to_numeric(row.get("season_line_premium"), errors="coerce")
-
-        extreme_growth_threshold = max(rev_floor * 4, 200)
-
-        if (
-            pd.notna(avg_rev_yoy)
-            and pd.notna(latest_rev_yoy)
-            and pd.notna(prev_rev_yoy)
-            and avg_rev_yoy >= max(rev_floor + 10, 30)
-            and latest_rev_yoy > 0
-            and prev_rev_yoy > 0
-            and abs(latest_rev_yoy - prev_rev_yoy) <= 20
-        ):
-            flags.append("趨勢續強")
-
-        if (
-            pd.notna(avg_rev_yoy)
-            and avg_rev_yoy >= extreme_growth_threshold
-        ) or (
-            pd.notna(latest_rev_yoy)
-            and latest_rev_yoy >= extreme_growth_threshold
-        ) or (
-            pd.notna(prev_rev_yoy)
-            and prev_rev_yoy >= extreme_growth_threshold
-        ):
-            flags.append("基期效應")
-
-        if (
-            pd.notna(latest_rev_yoy)
-            and pd.notna(prev_rev_yoy)
-            and abs(latest_rev_yoy - prev_rev_yoy) >= 35
-        ):
-            flags.append("成長失真")
-
-        if (
-            pd.notna(avg_rev_yoy)
-            and avg_rev_yoy >= max(rev_floor, 20)
-            and pd.notna(pe_ratio)
-            and pe_ratio >= max(pe_limit * 0.75, 18)
-        ):
-            flags.append("獲利未跟上")
-
-        if (
-            pd.notna(pe_ratio)
-            and pe_ratio >= max(pe_limit * 0.9, 18)
-            and pd.notna(avg_rev_yoy)
-            and pe_ratio > avg_rev_yoy * 0.8
-        ):
-            flags.append("估值過熱")
-
-        if (
-            pd.notna(season_line_premium)
-            and season_line_premium >= 0.08
-            and pd.notna(latest_rev_yoy)
-            and pd.notna(prev_rev_yoy)
-            and latest_rev_yoy <= prev_rev_yoy + 5
-        ):
-            flags.append("價格領先")
-
-        return "｜".join(flags) if flags else "未觸發警示"
-
-    result_df["alert_flags"] = result_df.apply(_flags, axis=1)
-    return result_df
-
-
-def make_growth_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
-    display_df = result_df.rename(columns={
-        "alert_flags": "警示標記",
-        "stock_id": "股票代號",
-        "stock_name": "股票名稱",
-        "market": "市場",
-        "close": "收盤價",
-        "pe_ratio": "本益比",
-        "vol_lot": "成交量(張)",
-        "avg_rev_yoy": "近2月平均營收年增(%)",
-        "rev_months": "營收月份",
-        "rev_cur": "當月營收",
-        "rev_ly": "去年同月營收",
-        "rev_ym": "最新營收月份",
-    })[[
-        "警示標記", "股票代號", "股票名稱", "市場", "收盤價", "本益比",
-        "近2月平均營收年增(%)", "營收月份", "成交量(張)", "當月營收", "去年同月營收", "最新營收月份",
-    ]].copy()
-
-    display_df["收盤價"] = pd.to_numeric(display_df["收盤價"], errors="coerce").round(2)
-    display_df["本益比"] = pd.to_numeric(display_df["本益比"], errors="coerce").round(2)
-    display_df["近2月平均營收年增(%)"] = pd.to_numeric(display_df["近2月平均營收年增(%)"], errors="coerce").round(2)
-    display_df["成交量(張)"] = pd.to_numeric(display_df["成交量(張)"], errors="coerce").fillna(0).round(0).astype(int)
-    display_df["當月營收"] = pd.to_numeric(display_df["當月營收"], errors="coerce").fillna(0).round(0).astype(int)
-    display_df["去年同月營收"] = pd.to_numeric(display_df["去年同月營收"], errors="coerce").fillna(0).round(0).astype(int)
-    return display_df.sort_values("收盤價", ascending=False).reset_index(drop=True)
-
-
-def render_growth_alert_summary(display_df: pd.DataFrame) -> None:
-    if display_df.empty or "警示標記" not in display_df.columns:
-        return
-
-    flattened = "｜".join(display_df["警示標記"].astype(str).tolist())
-    summary_df = pd.DataFrame(
-        [
-            ("基期效應", flattened.count("基期效應"), "avg/latest/prev >= max(門檻×4, 200)"),
-            ("趨勢續強", flattened.count("趨勢續強"), "近2月高成長，且雙月落差 <= 20"),
-            ("成長失真", flattened.count("成長失真"), "|latest - prev| >= 35"),
-            ("獲利未跟上", flattened.count("獲利未跟上"), "高成長，但 PE >= max(上限×0.75, 18)"),
-            ("估值過熱", flattened.count("估值過熱"), "PE >= max(上限×0.9, 18) 且 PE > 營收年增×0.8"),
-            ("價格領先", flattened.count("價格領先"), "季線溢價 >= 8%，且 latest <= prev + 5"),
-        ],
-        columns=["標記", "檔數", "判斷重點"],
-    )
-    st.dataframe(
-        summary_df,
-        use_container_width=True,
-        hide_index=True,
-        height=250,
-        column_config={
-            "標記": st.column_config.TextColumn("標記", width=92),
-            "檔數": st.column_config.NumberColumn("檔數", width=58, format="%d"),
-            "判斷重點": st.column_config.TextColumn("判斷重點", width="large"),
-        },
-    )
-
-
-def render_growth_tag_explainer(pe_max: float, rev_growth_min: float) -> None:
-    st.caption(
-        f"主條件：本益比 < {pe_max:.0f}、近2月平均營收年增 > {rev_growth_min:.0f}%、"
-        "成交量與股價門檻依左側設定、收盤價不可高於 MA60 的 12%。"
-    )
-    with st.expander("完整標記規則", expanded=False):
-        rule_df = pd.DataFrame(
-            [
-                ("基期效應", "avg/latest/prev_rev_yoy >= max(門檻×4, 200)"),
-                ("趨勢續強", "avg_rev_yoy >= max(門檻+10, 30)，且 latest/prev > 0，雙月落差 <= 20"),
-                ("成長失真", "|latest_rev_yoy - prev_rev_yoy| >= 35"),
-                ("獲利未跟上", "avg_rev_yoy >= max(門檻, 20)，且 pe_ratio >= max(PE上限×0.75, 18)"),
-                ("估值過熱", "pe_ratio >= max(PE上限×0.9, 18)，且 pe_ratio > avg_rev_yoy × 0.8"),
-                ("價格領先", "season_line_premium >= 8%，且 latest_rev_yoy <= prev_rev_yoy + 5"),
-                ("未觸發警示", "以上標記皆未觸發"),
-            ],
-            columns=["標記", "觸發條件"],
-        )
-        st.dataframe(
-            rule_df,
-            use_container_width=True,
-            hide_index=True,
-            height=282,
-            column_config={
-                "標記": st.column_config.TextColumn("標記", width=96),
-                "觸發條件": st.column_config.TextColumn("觸發條件", width="large"),
-            },
-        )
-    st.caption("欄位對應：latest/prev 為最近兩個營收月份年增率。若僅有單月資料，該類雙月比較標記不會觸發。")
-
-
-def render_growth_table(display_df: pd.DataFrame) -> None:
-    st.dataframe(
-        display_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "警示標記": st.column_config.TextColumn("警示標記", width=154),
-            "股票代號": st.column_config.TextColumn("股票代號", width=74),
-            "股票名稱": st.column_config.TextColumn("股票名稱", width=112),
-            "市場": st.column_config.TextColumn("市場", width=64),
-            "收盤價": st.column_config.NumberColumn("收盤價", width=78, format="%.2f"),
-            "本益比": st.column_config.NumberColumn("本益比", width=70, format="%.2f"),
-            "近2月平均營收年增(%)": st.column_config.NumberColumn("近2月平均營收年增(%)", width=142, format="%.2f%%"),
-            "營收月份": st.column_config.TextColumn("營收月份", width=96),
-            "成交量(張)": st.column_config.NumberColumn("成交量(張)", width=94, format="%d"),
-            "當月營收": st.column_config.NumberColumn("當月營收", width=112, format="%d"),
-            "去年同月營收": st.column_config.NumberColumn("去年同月營收", width=122, format="%d"),
-            "最新營收月份": st.column_config.TextColumn("最新營收月份", width=104),
-        },
-    )
-
-
-def render_result_view_selector(key: str, default: str = "標記說明") -> str:
-    current = st.session_state.get(key, default)
-    if current not in RESULT_VIEW_OPTIONS:
-        current = default
-    return st.radio(
-        "結果檢視",
-        RESULT_VIEW_OPTIONS,
-        index=RESULT_VIEW_OPTIONS.index(current),
-        key=key,
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def get_finmind_price_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
-    today = taipei_today()
-    start_date = (today - timedelta(days=220)).strftime("%Y-%m-%d")
-    params = {
-        "dataset": "TaiwanStockPrice",
-        "data_id": symbol,
-        "start_date": start_date,
-        "end_date": today.strftime("%Y-%m-%d"),
-    }
-    if token:
-        params["token"] = token
-
-    try:
-        time.sleep(1.2)
-        result = fetch_finmind_result(params, timeout=20)
-        status_code = get_status_code(result)
-        if status_code != 200 or not result.get("data"):
-            return pd.DataFrame()
-        df = parse_price_dataframe(result)
-        if df.empty or "close" not in df.columns or "date" not in df.columns:
-            return pd.DataFrame()
-        df = df.sort_values("date").reset_index(drop=True)
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df["close"] = pd.to_numeric(df["close"], errors="coerce")
-        df = df.dropna(subset=["date", "close"]).copy()
-        if df.empty:
-            return pd.DataFrame()
-        df["ma20"] = df["close"].rolling(20, min_periods=1).mean()
-        df["ma60"] = df["close"].rolling(60, min_periods=1).mean()
-        return df.tail(120).reset_index(drop=True)
-    except Exception:
-        return pd.DataFrame()
-
-
-def render_watchlist_adder(result_df: pd.DataFrame, family_id: str, finmind_token: str = "") -> None:
-    def _label(row: pd.Series) -> str:
-        return (
-            f"{row['stock_id']} {row['stock_name']} | {row['market']} | "
-            f"收盤 {format_watchlist_number(row['close'])} | "
-            f"營收年增 {format_watchlist_number(row['avg_rev_yoy'], '%')} | "
-            f"PE {format_watchlist_number(row['pe_ratio'])}"
-        )
-
-    def _caption(selected: dict, _chart_df: pd.DataFrame) -> str:
-        selected_close = pd.to_numeric(selected.get("close"), errors="coerce")
-        selected_ma60 = pd.to_numeric(selected.get("ma60"), errors="coerce")
-        selected_premium = pd.to_numeric(selected.get("season_line_premium"), errors="coerce")
-        return (
-            f"目前收盤 {format_watchlist_number(selected_close)}｜"
-            f"MA60 {format_watchlist_number(selected_ma60)}｜"
-            f"季線溢價 {format_watchlist_number(selected_premium * 100 if pd.notna(selected_premium) else None, '%')}"
-        )
-
-    render_watchlist_adder_base(
-        result_df,
-        family_id,
-        select_columns=[
-            "stock_id",
-            "stock_name",
-            "market",
-            "close",
-            "avg_rev_yoy",
-            "pe_ratio",
-            "ma60",
-            "season_line_premium",
-        ],
-        numeric_columns=["close", "avg_rev_yoy", "pe_ratio", "ma60", "season_line_premium"],
-        label_builder=_label,
-        chart_loader=get_finmind_price_chart_data,
-        selectbox_key="growth_watchlist_symbol",
-        add_button_key="growth_watchlist_add",
-        finmind_token=finmind_token,
-        caption_builder=_caption,
-    )
-
-
-family_id = st.session_state.get("inventory_family_id", get_default_family_id()).strip()
-if not FAMILY_ID_PATTERN.fullmatch(family_id):
-    st.error("family_id 格式錯誤，僅能使用英文字母、數字、底線(_)或連字號(-)，長度 1-64。")
-    st.stop()
-
-
-# ------------------------------
-# 初始畫面 / 顯示上次結果
-# ------------------------------
-if not run_btn:
-    # 尚未按下執行時，優先顯示 session_state 內的上次篩選結果。
-    if "screener_result" in st.session_state:
-        _r = st.session_state["screener_result"]
-        st.info("顯示上次執行結果。若要更新，請按左側按鈕重新篩選。")
-        _count = len(_r)
-        _rev_ym = _r["rev_ym"].iloc[0] if _count > 0 else "-"
-        st.subheader(f"成長股策略結果：{_count} 檔（最新營收月份：{_rev_ym}）")
-        _disp = make_growth_display_df(build_growth_alert_flags(_r, pe_max, rev_growth_min))
-        _view = render_result_view_selector("growth_result_view")
-        if _view == "標記說明":
-            render_growth_alert_summary(_disp)
-            render_growth_tag_explainer(pe_max, rev_growth_min)
-        elif _view == "明細表":
-            render_growth_table(_disp)
-            render_watchlist_adder(_r, family_id, finmind_token)
-        else:
-            st.caption("這是上次執行結果；若要更新資料，請重新執行篩選。")
-            st.caption("資料來源：股價來自 TWSE + TPEX OpenAPI；月營收來自 MOPS；本益比來自官方上市櫃口徑。")
-        _csv = dataframe_to_csv_bytes(_disp)
-        st.download_button(
-            "下載 CSV",
-            _csv,
-            f"成長股篩選_{taipei_now().strftime('%Y%m%d')}.csv",
-            "text/csv",
-        )
-        st.stop()
-    st.info("請先在左側設定篩選條件，然後點擊執行。")
-    with st.expander("查看篩選條件與計算說明", expanded=True):
-        st.markdown(f"""
-| 條件 | 門檻 | 資料來源 |
-|------|------|----------|
-| 本益比 | < **{pe_max:.0f}** 倍 | 官方上市櫃 API |
-| 近 2 月平均營收年增 | > **{rev_growth_min:.0f}%** | MOPS 月營收 |
-| 成交量 | > **{int(vol_min):,}** 張 | TWSE/TPEX OpenAPI |
-| 股價 | > **{price_min:.0f}** 元 | TWSE/TPEX OpenAPI |
-
-**本頁本益比採官方上市櫃 API 口徑。**
-
-本益比 = 官方上市櫃 API 提供之個股本益比
-
-> 若公開資料來源暫時連不上，可能會出現查詢失敗，稍後再試即可。
-> FinMind Token 只在最後查詢季線（MA60）時使用。
-""")
-    st.stop()
-
-# ------------------------------
-# 資料抓取與計算函式
-# ------------------------------
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_json_tpex(url: str) -> list:
     return fetch_json_tpex_base(url)
@@ -493,51 +70,449 @@ def fetch_mops_recent_revenue(latest_ym: str, months: int) -> pd.DataFrame:
     return fetch_mops_recent_revenue_frame(latest_ym, months=months)
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token: str = "") -> pd.DataFrame:
+    df, status_code, msg, retry_after = fetch_finmind_price_frame(
+        symbol,
+        start_date,
+        end_date,
+        token=token,
+        timeout=30,
+        sleep_seconds=1.2,
+        raise_on_rate_limit=False,
+    )
+    if status_code in (402, 403, 429):
+        raise RuntimeError(f"FINMIND_LIMIT:{status_code}:{retry_after}:{msg}")
+    if status_code != 200 or df.empty:
+        return pd.DataFrame()
+
+    df = df.dropna(subset=["date", "low", "close"]).sort_values("date").reset_index(drop=True)
+    return df[["date", "open", "high", "low", "close", "volume"]]
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
-def get_finmind_ma60(symbol: str, token: str = "") -> tuple[float | None, int | None, str]:
-    """取得個股最新 60 日均線（季線）與查詢狀態。"""
+def get_watchlist_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
     today = taipei_today()
-    start_date = (today - timedelta(days=140)).strftime("%Y-%m-%d")
+    start_date = (today - timedelta(days=220)).strftime("%Y-%m-%d")
+    end_date = today.strftime("%Y-%m-%d")
     try:
-        df, status_code, msg, _retry_after = fetch_finmind_price_frame(
+        df, status_code, _msg, _retry_after = fetch_finmind_price_frame(
             symbol,
             start_date,
-            today.strftime("%Y-%m-%d"),
+            end_date,
             token=token,
-            timeout=20,
-            sleep_seconds=1.2,
+            timeout=30,
+            sleep_seconds=0,
             raise_on_rate_limit=False,
         )
         if status_code != 200 or df.empty:
-            return None, status_code, msg
-        if "close" not in df.columns:
-            return None, status_code, msg
-        ma = df["close"].rolling(60, min_periods=60).mean().iloc[-1]
-        if pd.isna(ma):
-            return None, status_code, msg
-        return float(ma), status_code, msg
-    except Exception as e:
-        return None, None, str(e)
+            return pd.DataFrame()
+        df = df.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
+        df["ma60"] = pd.to_numeric(df["close"], errors="coerce").rolling(60, min_periods=1).mean()
+        return df.tail(120).reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame()
 
 
-# ------------------------------
-# Step 1：下載股價與營收原始資料
-# ------------------------------
-progress = st.progress(0, text="開始整理資料...")
+def _roc_month_number(ym: str) -> int | None:
+    clean = str(ym).strip().replace("/", "")
+    if len(clean) < 5 or not clean[-2:].isdigit():
+        return None
+    month = int(clean[-2:])
+    return month if 1 <= month <= 12 else None
+
+
+def build_recent_revenue_metrics_skip_february(df_rev: pd.DataFrame, months: int = 2) -> pd.DataFrame:
+    if df_rev.empty:
+        return pd.DataFrame(
+            columns=[
+                "stock_id",
+                "rev_ym",
+                "rev_yoy",
+                "rev_cur",
+                "rev_ly",
+                "avg_rev_yoy",
+                "rev_months",
+                "latest_rev_yoy",
+                "prev_rev_yoy",
+            ]
+        )
+
+    df = df_rev.copy()
+    df["stock_id"] = df["stock_id"].astype(str).str.strip()
+    df["rev_yoy"] = pd.to_numeric(df["rev_yoy"], errors="coerce")
+    df = df.dropna(subset=["stock_id", "rev_ym", "rev_yoy"])
+    df = df[df["rev_ym"].map(_roc_month_number) != 2].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for stock_id, group in df.sort_values("rev_ym", ascending=False).groupby("stock_id"):
+        selected = group.head(months).copy()
+        if len(selected) < months:
+            continue
+        latest = selected.iloc[0]
+        prev = selected.iloc[1]
+        rows.append(
+            {
+                "stock_id": stock_id,
+                "rev_ym": latest["rev_ym"],
+                "rev_yoy": latest["rev_yoy"],
+                "rev_cur": latest.get("rev_cur", pd.NA),
+                "rev_ly": latest.get("rev_ly", pd.NA),
+                "avg_rev_yoy": selected["rev_yoy"].mean(),
+                "rev_months": "/".join(selected["rev_ym"].astype(str).tolist()),
+                "latest_rev_yoy": latest["rev_yoy"],
+                "prev_rev_yoy": prev["rev_yoy"],
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def calc_history_row(row: pd.Series, history_df: pd.DataFrame) -> dict | None:
+    if history_df.empty or len(history_df) < 60:
+        return None
+    history_df = history_df.sort_values("date").reset_index(drop=True).copy()
+    history_df["close"] = pd.to_numeric(history_df["close"], errors="coerce")
+    history_df["low"] = pd.to_numeric(history_df["low"], errors="coerce")
+    history_df = history_df.dropna(subset=["close", "low"])
+    if len(history_df) < 60:
+        return None
+
+    latest_close = float(row["close"])
+    ma60 = float(history_df["close"].tail(60).mean())
+    low_idx = history_df["low"].idxmin()
+    low_row = history_df.loc[low_idx]
+    six_month_low = float(low_row["low"])
+    return {
+        "stock_id": str(row["stock_id"]),
+        "ma60": ma60,
+        "six_month_low": six_month_low,
+        "six_month_low_date": pd.to_datetime(low_row["date"]).strftime("%Y-%m-%d"),
+        "ma60_premium_pct": (latest_close / ma60 - 1) * 100 if ma60 > 0 else pd.NA,
+        "low_premium_pct": (latest_close / six_month_low - 1) * 100 if six_month_low > 0 else pd.NA,
+        "history_days": len(history_df),
+    }
+
+
+def parse_finmind_retry_seconds(error_msg: str):
+    parts = str(error_msg).split(":", 3)
+    numeric_parts = []
+    for part in parts[1:]:
+        try:
+            numeric_parts.append(max(int(float(part)), 0))
+        except Exception:
+            continue
+    if not numeric_parts:
+        return None
+    return numeric_parts[1] if len(numeric_parts) >= 2 else numeric_parts[0]
+
+
+def format_wait_time(seconds):
+    if seconds is None:
+        return "未知"
+    minutes, sec = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"{hours} 小時 {minutes} 分 {sec} 秒"
+    if minutes > 0:
+        return f"{minutes} 分 {sec} 秒"
+    return f"{sec} 秒"
+
+
+def make_strategy_frames(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    dragon = df[
+        df["ma60"].notna()
+        & (df["close"] > df["ma60"])
+        & (df["close"] <= df["ma60"] * (1 + DRAGON_MA60_MAX_PREMIUM))
+        & (df["pe_ratio"] <= DRAGON_PE_MAX)
+    ].copy()
+    hidden = df[
+        df["six_month_low"].notna()
+        & (df["close"] <= df["six_month_low"] * (1 + HIDDEN_DRAGON_LOW_MAX_PREMIUM))
+        & (df["pe_ratio"] <= HIDDEN_DRAGON_PE_MAX)
+    ].copy()
+
+    dragon["strategy"] = "龍騰升空"
+    hidden["strategy"] = "潛龍在淵"
+    dragon = dragon.sort_values(["avg_rev_yoy", "ttm_eps"], ascending=[False, False]).reset_index(drop=True)
+    hidden = hidden.sort_values(["low_premium_pct", "avg_rev_yoy"], ascending=[True, False]).reset_index(drop=True)
+    return dragon, hidden
+
+
+def make_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
+    if result_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "策略",
+                "股票代號",
+                "股票名稱",
+                "市場",
+                "收盤價",
+                "成交量(張)",
+                "近兩月平均營收年增(%)",
+                "採用營收月份",
+                "近四季EPS",
+                "PE",
+                "季線",
+                "季線溢價(%)",
+                "六個月最低價",
+                "最低價日期",
+                "低點溢價(%)",
+            ]
+        )
+
+    display_df = result_df.rename(
+        columns={
+            "strategy": "策略",
+            "stock_id": "股票代號",
+            "stock_name": "股票名稱",
+            "market": "市場",
+            "close": "收盤價",
+            "vol_lot": "成交量(張)",
+            "avg_rev_yoy": "近兩月平均營收年增(%)",
+            "rev_months": "採用營收月份",
+            "ttm_eps": "近四季EPS",
+            "pe_ratio": "PE",
+            "ma60": "季線",
+            "ma60_premium_pct": "季線溢價(%)",
+            "six_month_low": "六個月最低價",
+            "six_month_low_date": "最低價日期",
+            "low_premium_pct": "低點溢價(%)",
+        }
+    )
+    cols = [
+        "策略",
+        "股票代號",
+        "股票名稱",
+        "市場",
+        "收盤價",
+        "成交量(張)",
+        "近兩月平均營收年增(%)",
+        "採用營收月份",
+        "近四季EPS",
+        "PE",
+        "季線",
+        "季線溢價(%)",
+        "六個月最低價",
+        "最低價日期",
+        "低點溢價(%)",
+    ]
+    display_df = display_df[[col for col in cols if col in display_df.columns]].copy()
+    for col in ["收盤價", "近兩月平均營收年增(%)", "近四季EPS", "PE", "季線", "季線溢價(%)", "六個月最低價", "低點溢價(%)"]:
+        if col in display_df.columns:
+            display_df[col] = pd.to_numeric(display_df[col], errors="coerce").round(2)
+    if "成交量(張)" in display_df.columns:
+        display_df["成交量(張)"] = pd.to_numeric(display_df["成交量(張)"], errors="coerce").fillna(0).round(0).astype(int)
+    return display_df.sort_values("收盤價", ascending=False).reset_index(drop=True)
+
+
+def render_result_table(display_df: pd.DataFrame) -> None:
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "策略": st.column_config.TextColumn("策略", width=92),
+            "股票代號": st.column_config.TextColumn("股票代號", width=78),
+            "股票名稱": st.column_config.TextColumn("股票名稱", width=112),
+            "市場": st.column_config.TextColumn("市場", width=68),
+            "收盤價": st.column_config.NumberColumn("收盤價", width=82, format="%.2f"),
+            "成交量(張)": st.column_config.NumberColumn("成交量(張)", width=104, format="%d"),
+            "近兩月平均營收年增(%)": st.column_config.NumberColumn("近兩月平均營收年增(%)", width=164, format="%.2f"),
+            "採用營收月份": st.column_config.TextColumn("採用營收月份", width=116),
+            "近四季EPS": st.column_config.NumberColumn("近四季EPS", width=96, format="%.2f"),
+            "PE": st.column_config.NumberColumn("PE", width=72, format="%.2f"),
+            "季線": st.column_config.NumberColumn("季線", width=86, format="%.2f"),
+            "季線溢價(%)": st.column_config.NumberColumn("季線溢價(%)", width=112, format="%.2f"),
+            "六個月最低價": st.column_config.NumberColumn("六個月最低價", width=116, format="%.2f"),
+            "最低價日期": st.column_config.TextColumn("最低價日期", width=104),
+            "低點溢價(%)": st.column_config.NumberColumn("低點溢價(%)", width=112, format="%.2f"),
+        },
+    )
+
+
+def render_download(display_df: pd.DataFrame, label: str, file_prefix: str) -> None:
+    st.download_button(
+        label=label,
+        data=dataframe_to_csv_bytes(display_df),
+        file_name=f"{file_prefix}_{taipei_now().strftime('%Y%m%d')}.csv",
+        mime="text/csv",
+        disabled=display_df.empty,
+    )
+
+
+def render_watchlist_adder(result_df: pd.DataFrame, family_id: str, finmind_token: str = "") -> None:
+    if result_df.empty:
+        return
+
+    def _label(row: pd.Series) -> str:
+        return (
+            f"{row['stock_id']} {row['stock_name']} | {row['strategy']} | "
+            f"收盤 {format_watchlist_number(row['close'])} | "
+            f"營收年增 {format_watchlist_number(row['avg_rev_yoy'], '%')} | "
+            f"PE {format_watchlist_number(row['pe_ratio'])}"
+        )
+
+    def _caption(selected: dict, chart_df: pd.DataFrame) -> str:
+        selected_close = pd.to_numeric(selected.get("close"), errors="coerce")
+        selected_ma60 = pd.to_numeric(selected.get("ma60"), errors="coerce")
+        selected_low = pd.to_numeric(selected.get("six_month_low"), errors="coerce")
+        return (
+            f"收盤 {format_watchlist_number(selected_close)}｜"
+            f"季線 {format_watchlist_number(selected_ma60)}｜"
+            f"六個月低點 {format_watchlist_number(selected_low)}"
+        )
+
+    def _support_line(selected: dict):
+        return pd.to_numeric(selected.get("six_month_low"), errors="coerce")
+
+    render_watchlist_adder_base(
+        result_df,
+        family_id,
+        select_columns=[
+            "stock_id",
+            "stock_name",
+            "strategy",
+            "market",
+            "close",
+            "avg_rev_yoy",
+            "pe_ratio",
+            "ma60",
+            "six_month_low",
+        ],
+        numeric_columns=["close", "avg_rev_yoy", "pe_ratio", "ma60", "six_month_low"],
+        label_builder=_label,
+        chart_loader=get_watchlist_chart_data,
+        selectbox_key=f"double_dragon_watchlist_symbol_{result_df['strategy'].iloc[0]}",
+        add_button_key=f"double_dragon_watchlist_add_{result_df['strategy'].iloc[0]}",
+        finmind_token=finmind_token,
+        caption_builder=_caption,
+        support_line_builder=_support_line,
+    )
+
+
+render_meta_strip(
+    [
+        {"label": "共用條件", "value": "價量 + 營收 + EPS", "sub": "股價 > 60、成交量 > 1000"},
+        {"label": "營收口徑", "value": "近兩個非二月月份", "sub": "遇 2 月改取更前一月"},
+        {"label": "龍騰升空", "value": "季線上方 30% 內", "sub": "PE <= 30"},
+        {"label": "潛龍在淵", "value": "六個月低點 20% 內", "sub": "PE <= 20"},
+    ]
+)
+
+with st.sidebar:
+    render_global_navigation("growth_screener")
+    st.markdown("---")
+    st.markdown("**庫存分組設定**")
+    st.text_input(
+        "family_id",
+        value=st.session_state.get("inventory_family_id", get_default_family_id()),
+        key="inventory_family_id",
+        help="觀察清單使用的 family_id。",
+    )
+    st.divider()
+    st.header("雙龍吐珠設定")
+    finmind_token = st.text_input(
+        "FinMind Token（選填）",
+        value=get_runtime_secret("FINMIND_TOKEN", ""),
+        type="password",
+        help="查詢季線與六個月低點需要 FinMind TaiwanStockPrice。",
+    ).strip()
+    st.markdown("**固定篩選條件**")
+    st.caption(f"股價 > {PRICE_MIN:.0f}")
+    st.caption(f"收盤成交量 > {VOL_LOT_MIN:,} 張")
+    st.caption(f"近兩個非二月營收 YoY 平均 >= {AVG_REV_YOY_MIN:.0f}%")
+    st.caption(f"近四季 EPS >= {TTM_EPS_MIN:.0f}")
+    st.caption(f"龍騰升空：收盤價 > 季線、<= 季線 * {1 + DRAGON_MA60_MAX_PREMIUM:.1f}、PE <= {DRAGON_PE_MAX:.0f}")
+    st.caption(f"潛龍在淵：收盤價 <= 六個月最低點 * {1 + HIDDEN_DRAGON_LOW_MAX_PREMIUM:.1f}、PE <= {HIDDEN_DRAGON_PE_MAX:.0f}")
+    run_btn = st.button("執行雙龍吐珠篩選", use_container_width=True, type="primary")
+    if st.button("清除快取與結果", use_container_width=True):
+        st.cache_data.clear()
+        st.session_state.pop("double_dragon_result", None)
+        st.success("已清除快取與上次結果。")
+        st.stop()
+
+
+family_id = st.session_state.get("inventory_family_id", get_default_family_id()).strip()
+if not FAMILY_ID_PATTERN.fullmatch(family_id):
+    st.error("family_id 格式不正確，只能使用英數字、底線或連字號，長度 1-64。")
+    st.stop()
+
+
+def render_saved_result(saved: dict) -> None:
+    dragon_df = saved.get("dragon", pd.DataFrame())
+    hidden_df = saved.get("hidden", pd.DataFrame())
+    combined_df = saved.get("combined", pd.DataFrame())
+    rev_ym = saved.get("rev_ym", "-")
+
+    st.info("顯示上次篩選結果；如需更新資料，請重新執行篩選。")
+    render_result_summary(dragon_df, hidden_df, rev_ym)
+    render_result_tabs(dragon_df, hidden_df, combined_df)
+
+
+def render_result_summary(dragon_df: pd.DataFrame, hidden_df: pd.DataFrame, rev_ym: str) -> None:
+    total_unique = pd.concat([dragon_df, hidden_df], ignore_index=True)["stock_id"].nunique() if not dragon_df.empty or not hidden_df.empty else 0
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("龍騰升空", f"{len(dragon_df)} 檔")
+    col2.metric("潛龍在淵", f"{len(hidden_df)} 檔")
+    col3.metric("不重複股票", f"{total_unique} 檔")
+    col4.metric("最新營收月份", rev_ym)
+
+
+def render_result_tabs(dragon_df: pd.DataFrame, hidden_df: pd.DataFrame, combined_df: pd.DataFrame) -> None:
+    tab1, tab2, tab3 = st.tabs(["龍騰升空", "潛龍在淵", "合併清單"])
+    with tab1:
+        display_df = make_display_df(dragon_df)
+        render_result_table(display_df)
+        render_download(display_df, "下載龍騰升空 CSV", "龍騰升空")
+        render_watchlist_adder(dragon_df, family_id, finmind_token)
+    with tab2:
+        display_df = make_display_df(hidden_df)
+        render_result_table(display_df)
+        render_download(display_df, "下載潛龍在淵 CSV", "潛龍在淵")
+        render_watchlist_adder(hidden_df, family_id, finmind_token)
+    with tab3:
+        display_df = make_display_df(combined_df)
+        render_result_table(display_df)
+        render_download(display_df, "下載雙龍吐珠合併 CSV", "雙龍吐珠")
+
+
+if not run_btn:
+    if "double_dragon_result" in st.session_state:
+        render_saved_result(st.session_state["double_dragon_result"])
+    else:
+        st.info("按下側邊欄的「執行雙龍吐珠篩選」開始掃描。")
+        st.markdown(
+            f"""
+| 條件 | 龍騰升空 | 潛龍在淵 |
+|---|---:|---:|
+| 股價 | > {PRICE_MIN:.0f} | > {PRICE_MIN:.0f} |
+| 收盤成交量 | > {VOL_LOT_MIN:,} 張 | > {VOL_LOT_MIN:,} 張 |
+| 近兩月平均營收年增 | >= {AVG_REV_YOY_MIN:.0f}%（排除 2 月） | >= {AVG_REV_YOY_MIN:.0f}%（排除 2 月） |
+| 近四季 EPS | >= {TTM_EPS_MIN:.0f} | >= {TTM_EPS_MIN:.0f} |
+| PE | <= {DRAGON_PE_MAX:.0f} | <= {HIDDEN_DRAGON_PE_MAX:.0f} |
+| 技術位置 | 股價 > 季線，且 <= 季線 * {1 + DRAGON_MA60_MAX_PREMIUM:.1f} | 股價 <= 六個月最低點 * {1 + HIDDEN_DRAGON_LOW_MAX_PREMIUM:.1f} |
+"""
+        )
+    st.stop()
+
+
+progress = st.progress(0, text="正在下載股價與營收資料...")
 data_diagnostics = []
 
-progress.progress(5, text="正在下載股價資料（TWSE）...")
-raw_twse_price, _diag = fetch_json_with_diagnostic(fetch_latest_twse_price_rows, "", "TWSE 股價")
-data_diagnostics.append(_diag)
+progress.progress(8, text="正在下載 TWSE 股價資料...")
+raw_twse_price, diag_twse = fetch_json_with_diagnostic(fetch_latest_twse_price_rows, "", "TWSE 股價")
+data_diagnostics.append(diag_twse)
 
-progress.progress(18, text="正在下載股價資料（TPEX）...")
-raw_tpex_price, _diag = fetch_json_with_diagnostic(fetch_json_tpex, URL_TPEX_PRICE, "TPEX 股價")
-data_diagnostics.append(_diag)
+progress.progress(16, text="正在下載 TPEX 股價資料...")
+raw_tpex_price, diag_tpex = fetch_json_with_diagnostic(fetch_json_tpex, URL_TPEX_PRICE, "TPEX 股價")
+data_diagnostics.append(diag_tpex)
 
-_latest_rev_ym = latest_revenue_ym()
-progress.progress(35, text=f"正在下載 MOPS 月營收（{_latest_rev_ym} 起近 3 月）...")
+latest_rev = latest_revenue_ym()
+progress.progress(26, text=f"正在下載 MOPS 月營收（{latest_rev} 起近 4 個月）...")
 try:
-    df_rev = fetch_mops_recent_revenue(_latest_rev_ym, months=3)
+    df_rev = fetch_mops_recent_revenue(latest_rev, months=4)
     data_diagnostics.append(
         DataSourceDiagnostic(
             source="MOPS 月營收",
@@ -552,7 +527,7 @@ except Exception as exc:
         DataSourceDiagnostic(
             source="MOPS 月營收",
             status=STATUS_FAILED,
-            message="抓取失敗，已將本資料源標記為不可用。",
+            message="抓取失敗，無法產生可信篩選結果。",
             detail=f"{type(exc).__name__}: {exc}",
             records=0,
         )
@@ -567,246 +542,199 @@ if df_rev.empty:
     st.error("MOPS 月營收資料無法取得，本頁無法產生可信選股結果。")
     st.stop()
 
-progress.progress(65, text="正在整理候選名單...")
-
-# ------------------------------
-# Step 2：整理股價資料（TWSE + TPEX）
-# ------------------------------
+progress.progress(42, text="整理價量與營收資料...")
 df_price = build_price_snapshot(raw_twse_price, raw_tpex_price)
-
-# ------------------------------
-# Step 3：整理營收資料（MOPS）
-# ------------------------------
-# 只取每檔股票最近 2 個月的營收年增率，計算平均 YoY 與月份字串。
-df_rev_final = build_recent_revenue_metrics(df_rev, months=2)
-
-# ------------------------------
-# Step 4：依營收、成交量、股價做初步篩選
-# ------------------------------
-df_merged = df_price.merge(df_rev_final, on="stock_id", how="inner")
-
-df_candidates = df_merged[
-    (df_merged["avg_rev_yoy"] > rev_growth_min)
-    & (df_merged["vol_lot"]   > vol_min)
-    & (df_merged["close"]     > price_min)
-].copy().reset_index(drop=True)
-
-n_candidates = len(df_candidates)
-progress.progress(70, text=f"完成初步篩選：{n_candidates} 檔")
-
-if n_candidates == 0:
-    progress.progress(100, text="完成")
-    st.warning("沒有股票符合營收/成交量/股價條件，請放寬條件後再試。")
+df_rev_metrics = build_recent_revenue_metrics_skip_february(df_rev, months=2)
+if df_rev_metrics.empty:
+    st.error("近兩個非二月營收月份不足，無法計算營收年增平均。")
     st.stop()
 
+df_merged = df_price.merge(df_rev_metrics, on="stock_id", how="inner")
+df_candidates = df_merged[
+    (df_merged["close"] > PRICE_MIN)
+    & (df_merged["vol_lot"] > VOL_LOT_MIN)
+    & (df_merged["avg_rev_yoy"] >= AVG_REV_YOY_MIN)
+].copy().reset_index(drop=True)
 
-# 用官方上市櫃本益比建立估值資料。
-progress.progress(71, text="抓取官方上市櫃本益比...")
+if df_candidates.empty:
+    progress.progress(100, text="篩選完成")
+    st.warning("沒有股票符合共用的股價、成交量與營收條件。")
+    st.stop()
+
+progress.progress(55, text="下載官方 PE 並反推近四季 EPS...")
 df_public_pe, pe_diagnostics = fetch_public_pe_ratios_with_diagnostics()
 data_diagnostics.extend(pe_diagnostics)
 if df_public_pe.empty:
-    progress.progress(100, text="完成")
+    progress.progress(100, text="官方 PE 取得失敗")
     render_data_diagnostics(data_diagnostics, expanded=True)
-    st.error("官方上市櫃本益比資料目前抓取失敗，無法套用 PE 條件，請稍後再試。")
+    st.error("官方 PE 資料目前抓取失敗，無法套用 PE 與 EPS 條件。")
     st.stop()
+
 df_candidates = attach_public_valuation(df_candidates, df_public_pe)
+df_common = df_candidates[
+    df_candidates["pe_ratio"].notna()
+    & df_candidates["ttm_eps"].notna()
+    & (df_candidates["ttm_eps"] >= TTM_EPS_MIN)
+    & (df_candidates["pe_ratio"] <= DRAGON_PE_MAX)
+].copy().reset_index(drop=True)
 
-df_candidates["_pe_sort"] = df_candidates["pe_ratio"].fillna(pe_max)
-df_candidates = df_candidates.sort_values(
-    ["_pe_sort", "avg_rev_yoy", "vol_lot"],
-    ascending=[True, False, False],
-).drop(columns=["_pe_sort"]).reset_index(drop=True)
-
-n_candidates = len(df_candidates)
-progress.progress(82, text=f"候選股 {n_candidates} 檔，套用官方本益比條件...")
-
-df_result = df_candidates[
-    df_candidates["pe_ratio"].notna() & (df_candidates["pe_ratio"] < pe_max)
-].copy().sort_values("avg_rev_yoy", ascending=False).reset_index(drop=True)
-
-if df_result.empty:
-    progress.progress(100, text="完成")
-    st.warning(f"候選股 {n_candidates} 檔中，沒有股票符合本益比 < {pe_max:.0f}。")
-    df_no_pe = df_candidates[df_candidates["pe_ratio"].notna()].sort_values("pe_ratio")
-    if not df_no_pe.empty:
-        with st.expander("查看接近本益比門檻的候選股", expanded=False):
-            st.caption("以下為通過其他條件但未通過本益比門檻的股票（前 20 檔）。")
-            st.dataframe(
-                df_no_pe[["stock_id", "stock_name", "market", "close", "pe_ratio", "avg_rev_yoy"]].head(20),
-                use_container_width=True,
-                hide_index=True,
-            )
+if df_common.empty:
+    progress.progress(100, text="篩選完成")
+    st.warning("沒有股票符合共用 EPS 條件與策略所需 PE 條件。")
     st.stop()
 
-progress.progress(94, text=f"三線程查詢季線條件（FinMind，0 / {len(df_result)} 檔）...")
+progress.progress(68, text=f"準備查詢近 {HISTORY_MONTHS} 個月股價歷史：{len(df_common)} 檔...")
+end_date = taipei_today()
+start_date = end_date - timedelta(days=int(HISTORY_MONTHS * 31))
+start_str = start_date.strftime("%Y-%m-%d")
+end_str = end_date.strftime("%Y-%m-%d")
+
+history_rows = []
+history_failed = []
+rate_limit_msg = ""
 
 
-def fetch_ma60_row(row_data: dict) -> dict:
+def fetch_history_metrics(row_data: dict):
     sid = str(row_data["stock_id"])
-    ma60, status_code, msg = get_finmind_ma60(sid, finmind_token)
-    return {
-        "stock_id": sid,
-        "ma60": ma60,
-        "ma60_status": status_code,
-        "ma60_msg": msg,
-    }
+    try:
+        hist = get_finmind_price_history(sid, start_str, end_str, finmind_token)
+        metrics = calc_history_row(pd.Series(row_data), hist)
+        if metrics is None:
+            return "failed", sid
+        return "ok", metrics
+    except RuntimeError as exc:
+        err = str(exc)
+        if "FINMIND_LIMIT" in err:
+            return "rate_limited", err
+        return "failed", sid
+    except Exception:
+        return "failed", sid
 
 
-ma60_rows = []
-ma60_done_count = 0
-ma60_targets = df_result[["stock_id"]].to_dict("records")
-ma60_iter = iter(ma60_targets)
-ma60_pending: dict = {}
+done_count = 0
+targets = df_common.to_dict("records")
+target_iter = iter(targets)
+pending = {}
+history_bar = st.progress(0, text=f"查詢 FinMind 歷史股價：0 / {len(targets)} 檔...")
 
 with ThreadPoolExecutor(max_workers=3) as executor:
-    for _ in range(min(3, len(ma60_targets))):
+    for _ in range(min(3, len(targets))):
         try:
-            row_data = next(ma60_iter)
+            row_data = next(target_iter)
         except StopIteration:
             break
-        future = executor.submit(fetch_ma60_row, row_data)
-        ma60_pending[future] = str(row_data["stock_id"])
+        pending[executor.submit(fetch_history_metrics, row_data)] = str(row_data["stock_id"])
 
-    while ma60_pending:
-        done, _not_done = wait(list(ma60_pending.keys()), return_when=FIRST_COMPLETED)
-
+    while pending:
+        done, _not_done = wait(list(pending.keys()), return_when=FIRST_COMPLETED)
         for future in done:
-            ma60_pending.pop(future, "")
-            ma60_rows.append(future.result())
-            ma60_done_count += 1
-            progress.progress(
-                94,
-                text=f"三線程查詢季線條件（FinMind，{ma60_done_count} / {len(ma60_targets)} 檔）...",
+            sid = pending.pop(future, "")
+            status, payload = future.result()
+            done_count += 1
+
+            if status == "ok":
+                history_rows.append(payload)
+            elif status == "rate_limited":
+                rate_limit_msg = payload
+            else:
+                history_failed.append(payload or sid)
+
+            history_bar.progress(
+                min(done_count / len(targets), 1.0),
+                text=f"查詢 FinMind 歷史股價：{done_count} / {len(targets)} 檔...",
             )
 
+            if rate_limit_msg:
+                break
+
             try:
-                row_data = next(ma60_iter)
+                row_data = next(target_iter)
             except StopIteration:
                 continue
-            next_future = executor.submit(fetch_ma60_row, row_data)
-            ma60_pending[next_future] = str(row_data["stock_id"])
+            pending[executor.submit(fetch_history_metrics, row_data)] = str(row_data["stock_id"])
 
-df_ma60 = pd.DataFrame(ma60_rows)
-df_result = df_result.merge(df_ma60, on="stock_id", how="left")
-df_result["season_line_premium"] = (
-    (pd.to_numeric(df_result["close"], errors="coerce") / pd.to_numeric(df_result["ma60"], errors="coerce")) - 1
-)
+        if rate_limit_msg:
+            for future in pending:
+                future.cancel()
+            break
 
-ma60_rate_limited = df_result["ma60_status"].isin([402, 403, 429]).sum()
-if ma60_rate_limited > 0:
-    _sample_ma60 = df_result[df_result["ma60_status"].isin([402, 403, 429])][
-        ["stock_id", "stock_name", "ma60_status", "ma60_msg"]
-    ].head(10)
+if rate_limit_msg and not history_rows:
+    retry_seconds = parse_finmind_retry_seconds(rate_limit_msg)
     data_diagnostics.append(
         make_finmind_diagnostic(
-            "FinMind MA60",
+            "FinMind 歷史股價",
             429,
-            "部分股票 MA60 查詢觸發限流。",
-            records=len(df_result) - ma60_rate_limited,
-            sample_ids=_sample_ma60["stock_id"].tolist(),
+            rate_limit_msg,
+            records=0,
+            sample_ids=history_failed[:10],
         )
     )
-    progress.progress(100, text="FinMind 季線查詢受限")
+    progress.progress(100, text="FinMind 查詢受限")
     render_data_diagnostics(data_diagnostics, expanded=True)
-    st.error(
-        f"FinMind 季線資料查詢受限：基本面通過後剩 {len(df_result)} 檔，"
-        f"但仍有 {ma60_rate_limited} 檔在查 MA60 時收到 402/403/429。"
-        "請稍後再試或清除快取後重跑。"
-    )
-    if not _sample_ma60.empty:
-        with st.expander("查看部分受限股票", expanded=False):
-            st.dataframe(_sample_ma60, use_container_width=True, hide_index=True)
+    st.error(f"FinMind 歷史股價查詢受限，請稍後再試。預估等待：{format_wait_time(retry_seconds)}。")
     st.stop()
 
-ma60_missing = int(df_result["ma60"].isna().sum())
-if ma60_missing > 0:
+if rate_limit_msg:
     data_diagnostics.append(
         make_finmind_diagnostic(
-            "FinMind MA60",
+            "FinMind 歷史股價",
+            429,
+            rate_limit_msg,
+            records=len(history_rows),
+            sample_ids=history_failed[:10],
+        )
+    )
+    st.warning(f"FinMind 查詢途中受限，本次只完成 {len(history_rows)} / {len(targets)} 檔，結果可能不完整。")
+elif history_failed:
+    data_diagnostics.append(
+        make_finmind_diagnostic(
+            "FinMind 歷史股價",
             None,
-            "部分股票無法取得足夠歷史股價計算 MA60。",
-            records=len(df_result) - ma60_missing,
-            sample_ids=df_result[df_result["ma60"].isna()]["stock_id"].head(10).tolist(),
+            "部分股票無法取得足夠歷史股價。",
+            records=len(history_rows),
+            sample_ids=history_failed[:10],
         )
     )
 else:
-    data_diagnostics.append(make_finmind_diagnostic("FinMind MA60", 200, "", records=len(df_result)))
+    data_diagnostics.append(make_finmind_diagnostic("FinMind 歷史股價", 200, "", records=len(history_rows)))
 
-df_result = df_result[
-    df_result["ma60"].notna()
-    & (df_result["close"] <= df_result["ma60"] * (1 + SEASON_LINE_MAX_PREMIUM))
-].copy().sort_values("avg_rev_yoy", ascending=False).reset_index(drop=True)
-
-progress.progress(100, text="篩選完成")
-
-# 把結果存入 session_state，讓下載 CSV 或 rerun 後仍可直接顯示。
-st.session_state["screener_result"] = df_result
-
-# ------------------------------
-# 結果顯示
-# ------------------------------
-count = len(df_result)
-rev_ym = df_result["rev_ym"].iloc[0] if count > 0 else "-"
-
-col1, col2, col3, col4, col5, col6 = st.columns(6)
-col1.metric("結果數量", f"{count} 檔")
-col2.metric("本益比", f"< {pe_max:.0f}")
-col3.metric("近 2 月營收年增", f"> {rev_growth_min:.0f}%")
-col4.metric("成交量", f"> {int(vol_min):,} 張")
-col5.metric("股價", f"> {price_min:.0f}")
-col6.metric("PE 口徑", "官方API")
-
-st.divider()
-
-if count == 0:
-    st.warning("通過本益比條件的股票，在季線 12% 條件下全數被排除。")
-    with st.expander("查看本次篩選流程", expanded=False):
-        st.write(
-            f"初步候選：{n_candidates} 檔｜"
-            f"本益比門檻：< {pe_max:.0f}｜"
-            f"季線限制：收盤價不高於 MA60 的 {1 + SEASON_LINE_MAX_PREMIUM:.0%}"
-        )
+df_history = pd.DataFrame(history_rows)
+if df_history.empty:
+    progress.progress(100, text="篩選完成")
+    render_data_diagnostics(data_diagnostics, expanded=True)
+    st.warning("歷史股價資料不足，無法計算季線或六個月最低點。")
     st.stop()
 
-# 顯示 TWSE 股價資料日期，方便確認本次篩選使用的交易日。
-_price_date_caption = ""
-try:
-    _price_date_raw = raw_twse_price[0].get("Date", "")
-    if len(_price_date_raw) == 7:  # 民國日期格式，例如 1150512
-        _y, _m, _d = int(_price_date_raw[:3]) + 1911, _price_date_raw[3:5], _price_date_raw[5:7]
-        _price_date_caption = f"股價資料日期：{_y}/{_m}/{_d}（TWSE）"
-except Exception:
-    pass
+df_ready = df_common.merge(df_history, on="stock_id", how="inner")
+dragon_df, hidden_df = make_strategy_frames(df_ready)
+combined_df = pd.concat([dragon_df, hidden_df], ignore_index=True)
 
-display_df = make_growth_display_df(build_growth_alert_flags(df_result, pe_max, rev_growth_min))
-st.subheader(f"成長股策略結果：{count} 檔（最新營收月份：{rev_ym}）")
-view = render_result_view_selector("growth_result_view")
-if view == "標記說明":
-    render_growth_alert_summary(display_df)
-    render_growth_tag_explainer(pe_max, rev_growth_min)
-elif view == "明細表":
-    render_growth_table(display_df)
-    render_watchlist_adder(df_result, family_id, finmind_token)
+progress.progress(100, text="雙龍吐珠篩選完成")
+
+latest_used_rev = "-"
+if not df_rev_metrics.empty and "rev_ym" in df_rev_metrics.columns:
+    latest_used_rev = str(df_rev_metrics["rev_ym"].mode().iloc[0])
+
+st.session_state["double_dragon_result"] = {
+    "dragon": dragon_df,
+    "hidden": hidden_df,
+    "combined": combined_df,
+    "rev_ym": latest_used_rev,
+}
+
+st.subheader("雙龍吐珠篩選結果")
+render_result_summary(dragon_df, hidden_df, latest_used_rev)
+if dragon_df.empty and hidden_df.empty:
+    st.warning("共用條件通過後，沒有股票符合龍騰升空或潛龍在淵的策略條件。")
+    with st.expander("查看通過共用條件但未入選的股票", expanded=False):
+        preview = make_display_df(df_ready.assign(strategy="共用條件通過"))
+        render_result_table(preview)
 else:
-    render_data_diagnostics(data_diagnostics)
-    if _price_date_caption:
-        st.caption(_price_date_caption)
-    st.write(
-        f"初步候選：{n_candidates} 檔｜"
-        f"結果數量：{count} 檔｜"
-        f"本益比：< {pe_max:.0f}｜"
-        f"近 2 月營收年增：> {rev_growth_min:.0f}%"
+    render_result_tabs(dragon_df, hidden_df, combined_df)
+
+with st.expander("資料來源與執行診斷", expanded=False):
+    render_data_diagnostics(data_diagnostics, expanded=True)
+    st.caption(
+        "股價與成交量來自 TWSE/TPEX OpenAPI；月營收來自 MOPS；PE 來自官方上市櫃資料；"
+        "季線與六個月最低點來自 FinMind TaiwanStockPrice。"
     )
-    st.caption("資料來源：股價來自 TWSE + TPEX OpenAPI；月營收來自 MOPS；本益比來自官方上市櫃口徑。")
-    st.caption("本工具僅供研究參考，請自行評估投資風險。")
-
-csv_bytes = dataframe_to_csv_bytes(display_df)
-st.download_button(
-    label="下載 CSV",
-    data=csv_bytes,
-    file_name=f"成長股篩選_{taipei_now().strftime('%Y%m%d')}.csv",
-    mime="text/csv",
-)
-
-st.divider()
-
