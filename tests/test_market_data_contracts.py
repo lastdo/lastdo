@@ -87,6 +87,26 @@ class MarketDataContractTests(unittest.TestCase):
         self.assertEqual(df["stock_id"].tolist(), ["2330"])
         self.assertEqual(df.loc[0, "mops_company_type"], 0)
 
+    def test_fetch_mops_recent_revenue_skips_empty_latest_months(self):
+        def fake_month_frame(year, month):
+            ym = f"{year}{month:02d}"
+            if ym in {"11505", "11504", "11503"}:
+                return pd.DataFrame(columns=mops_revenue.MOPS_REVENUE_COLUMNS)
+            return pd.DataFrame(
+                {
+                    "stock_id": ["2330"],
+                    "rev_ym": [ym],
+                    "rev_yoy": [20.0],
+                    "rev_cur": [300000],
+                    "rev_ly": [250000],
+                }
+            )
+
+        with patch("data_layer.mops_revenue.fetch_mops_month_revenue_frame", side_effect=fake_month_frame):
+            df = mops_revenue.fetch_mops_recent_revenue_frame("11505", months=2)
+
+        self.assertEqual(df["rev_ym"].tolist(), ["11502", "11501"])
+
     def test_build_price_snapshot_normalizes_twse_and_tpex(self):
         raw_twse = [
             {

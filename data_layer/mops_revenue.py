@@ -160,13 +160,17 @@ def fetch_mops_month_revenue_frame(
 def fetch_mops_recent_revenue_frame(latest_ym: str | None = None, months: int = 1) -> pd.DataFrame:
     ym = latest_ym or latest_revenue_ym()
     month_frames: list[pd.DataFrame] = []
+    target_months = max(int(months), 1)
+    max_scan_months = target_months + 6
 
-    for _ in range(max(int(months), 1)):
+    for _ in range(max_scan_months):
         if not ym:
             break
         frame = fetch_mops_month_revenue_frame(int(ym[:3]), int(ym[3:]))
         if not frame.empty:
             month_frames.append(frame)
+            if len(month_frames) >= target_months:
+                break
         ym = previous_revenue_ym(ym)
 
     if not month_frames:
