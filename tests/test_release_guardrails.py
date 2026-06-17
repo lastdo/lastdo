@@ -16,9 +16,18 @@ class ReleaseGuardrailTests(unittest.TestCase):
             ROOT / "pages" / "3_growth_screener.py",
             ROOT / "pages" / "4_chip_screener.py",
             ROOT / "pages" / "5_bottom_screener.py",
+            ROOT / "pages" / "6_strategy_backtest.py",
             ROOT / "render_layer" / "style.py",
             ROOT / "render_layer" / "watchlist.py",
             ROOT / "render_layer" / "diagnostics.py",
+            ROOT / "backtest_common" / "__init__.py",
+            ROOT / "backtest_common" / "double_dragon_rules.py",
+            ROOT / "backtest_data_layer" / "__init__.py",
+            ROOT / "backtest_data_layer" / "double_dragon_snapshot.py",
+            ROOT / "backtest_data_layer" / "finmind_sources.py",
+            ROOT / "backtest_data_layer" / "historical_prices.py",
+            ROOT / "backtest_render_layer" / "__init__.py",
+            ROOT / "backtest_render_layer" / "double_dragon_tables.py",
         ]
 
         for path in paths:
