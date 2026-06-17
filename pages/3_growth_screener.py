@@ -49,6 +49,7 @@ DRAGON_MA60_MAX_PREMIUM = 0.30
 HIDDEN_DRAGON_PE_MAX = 20.0
 HIDDEN_DRAGON_LOW_MAX_PREMIUM = 0.20
 HISTORY_MONTHS = 6
+MOPS_REVENUE_CACHE_VERSION = "mops-revenue-diagnostics-v2"
 
 
 st.set_page_config(page_title="雙龍吐珠", page_icon="🐉", layout="wide")
@@ -66,7 +67,8 @@ def fetch_json_tpex(url: str) -> list:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_mops_recent_revenue(latest_ym: str, months: int) -> pd.DataFrame:
+def fetch_mops_recent_revenue(latest_ym: str, months: int, cache_version: str) -> pd.DataFrame:
+    _ = cache_version
     return fetch_mops_recent_revenue_frame(latest_ym, months=months)
 
 
@@ -512,8 +514,13 @@ data_diagnostics.append(diag_tpex)
 latest_rev = latest_revenue_ym()
 progress.progress(26, text=f"正在下載 MOPS 月營收（{latest_rev} 起近 4 個月）...")
 try:
-    df_rev = fetch_mops_recent_revenue(latest_rev, months=4)
+    df_rev = fetch_mops_recent_revenue(latest_rev, months=4, cache_version=MOPS_REVENUE_CACHE_VERSION)
     mops_detail = "\n".join(str(error) for error in df_rev.attrs.get("mops_errors", []))
+    if df_rev.empty and not mops_detail:
+        mops_detail = (
+            "MOPS returned no rows and no low-level errors were captured. "
+            "This can happen if Streamlit served an older cached empty result; clear cache and rerun."
+        )
     data_diagnostics.append(
         DataSourceDiagnostic(
             source="MOPS 月營收",
