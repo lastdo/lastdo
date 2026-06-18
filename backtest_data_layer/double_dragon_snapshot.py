@@ -276,4 +276,6 @@ def _branch_label(row: pd.Series) -> str:
         labels.append("龍騰升空")
     if bool(row.get("is_dragon_hidden_pass")):
         labels.append("潛龍在淵")
+    if len(labels) == 2:
+        return "雙龍合璧"
     return "/".join(labels) if labels else "未進分支"

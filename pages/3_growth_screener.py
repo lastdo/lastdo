@@ -46,9 +46,11 @@ TTM_EPS_MIN = 5.0
 
 DRAGON_PE_MAX = 30.0
 DRAGON_MA60_MAX_PREMIUM = 0.30
+DRAGON_MA240_MAX_PREMIUM = 0.30
 HIDDEN_DRAGON_PE_MAX = 20.0
 HIDDEN_DRAGON_LOW_MAX_PREMIUM = 0.20
-HISTORY_MONTHS = 6
+PRICE_HISTORY_MONTHS = 12
+LOW_HISTORY_MONTHS = 6
 
 
 st.set_page_config(page_title="雙龍吐珠", page_icon="🐉", layout="wide")
@@ -173,23 +175,32 @@ def calc_history_row(row: pd.Series, history_df: pd.DataFrame) -> dict | None:
     if history_df.empty or len(history_df) < 60:
         return None
     history_df = history_df.sort_values("date").reset_index(drop=True).copy()
+    history_df["date"] = pd.to_datetime(history_df["date"], errors="coerce")
     history_df["close"] = pd.to_numeric(history_df["close"], errors="coerce")
     history_df["low"] = pd.to_numeric(history_df["low"], errors="coerce")
-    history_df = history_df.dropna(subset=["close", "low"])
+    history_df = history_df.dropna(subset=["date", "close", "low"])
     if len(history_df) < 60:
         return None
 
     latest_close = float(row["close"])
     ma60 = float(history_df["close"].tail(60).mean())
-    low_idx = history_df["low"].idxmin()
+    ma240 = float(history_df["close"].tail(240).mean()) if len(history_df) >= 240 else pd.NA
+    latest_date = history_df["date"].max()
+    low_window_start = latest_date - timedelta(days=int(LOW_HISTORY_MONTHS * 31))
+    low_df = history_df[history_df["date"] >= low_window_start]
+    if low_df.empty:
+        low_df = history_df
+    low_idx = low_df["low"].idxmin()
     low_row = history_df.loc[low_idx]
     six_month_low = float(low_row["low"])
     return {
         "stock_id": str(row["stock_id"]),
         "ma60": ma60,
+        "ma240": ma240,
         "six_month_low": six_month_low,
         "six_month_low_date": pd.to_datetime(low_row["date"]).strftime("%Y-%m-%d"),
         "ma60_premium_pct": (latest_close / ma60 - 1) * 100 if ma60 > 0 else pd.NA,
+        "ma240_premium_pct": (latest_close / ma240 - 1) * 100 if pd.notna(ma240) and ma240 > 0 else pd.NA,
         "low_premium_pct": (latest_close / six_month_low - 1) * 100 if six_month_low > 0 else pd.NA,
         "history_days": len(history_df),
     }
@@ -223,8 +234,10 @@ def format_wait_time(seconds):
 def make_strategy_frames(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     dragon = df[
         df["ma60"].notna()
+        & df["ma240"].notna()
         & (df["close"] > df["ma60"])
         & (df["close"] <= df["ma60"] * (1 + DRAGON_MA60_MAX_PREMIUM))
+        & (df["close"] <= df["ma240"] * (1 + DRAGON_MA240_MAX_PREMIUM))
         & (df["pe_ratio"] <= DRAGON_PE_MAX)
     ].copy()
     hidden = df[
@@ -238,6 +251,21 @@ def make_strategy_frames(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     dragon = dragon.sort_values(["avg_rev_yoy", "ttm_eps"], ascending=[False, False]).reset_index(drop=True)
     hidden = hidden.sort_values(["low_premium_pct", "avg_rev_yoy"], ascending=[True, False]).reset_index(drop=True)
     return dragon, hidden
+
+
+def make_combined_strategy_frame(dragon_df: pd.DataFrame, hidden_df: pd.DataFrame) -> pd.DataFrame:
+    combined = pd.concat([dragon_df, hidden_df], ignore_index=True)
+    if combined.empty or "stock_id" not in combined.columns:
+        return combined
+
+    rows = []
+    for _stock_id, group in combined.groupby("stock_id", sort=False):
+        row = group.iloc[0].copy()
+        strategies = set(group["strategy"].dropna().astype(str))
+        if {"龍騰升空", "潛龍在淵"}.issubset(strategies):
+            row["strategy"] = "雙龍合璧"
+        rows.append(row)
+    return pd.DataFrame(rows).reset_index(drop=True)
 
 
 def make_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
@@ -256,6 +284,8 @@ def make_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
                 "PE",
                 "季線",
                 "季線溢價(%)",
+                "MA240",
+                "MA240 premium(%)",
                 "六個月最低價",
                 "最低價日期",
                 "低點溢價(%)",
@@ -274,6 +304,8 @@ def make_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
             "rev_months": "採用營收月份",
             "ttm_eps": "近四季EPS",
             "pe_ratio": "PE",
+            "ma240": "MA240",
+            "ma240_premium_pct": "MA240 premium(%)",
             "ma60": "季線",
             "ma60_premium_pct": "季線溢價(%)",
             "six_month_low": "六個月最低價",
@@ -294,12 +326,14 @@ def make_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
         "PE",
         "季線",
         "季線溢價(%)",
+        "MA240",
+        "MA240 premium(%)",
         "六個月最低價",
         "最低價日期",
         "低點溢價(%)",
     ]
     display_df = display_df[[col for col in cols if col in display_df.columns]].copy()
-    for col in ["收盤價", "近兩月平均營收年增(%)", "近四季EPS", "PE", "季線", "季線溢價(%)", "六個月最低價", "低點溢價(%)"]:
+    for col in ["收盤價", "近兩月平均營收年增(%)", "近四季EPS", "PE", "季線", "季線溢價(%)", "MA240", "MA240 premium(%)", "六個月最低價", "低點溢價(%)"]:
         if col in display_df.columns:
             display_df[col] = pd.to_numeric(display_df[col], errors="coerce").round(2)
     if "成交量(張)" in display_df.columns:
@@ -325,6 +359,8 @@ def render_result_table(display_df: pd.DataFrame) -> None:
             "PE": st.column_config.NumberColumn("PE", width=72, format="%.2f"),
             "季線": st.column_config.NumberColumn("季線", width=86, format="%.2f"),
             "季線溢價(%)": st.column_config.NumberColumn("季線溢價(%)", width=112, format="%.2f"),
+            "MA240": st.column_config.NumberColumn("MA240", width=86, format="%.2f"),
+            "MA240 premium(%)": st.column_config.NumberColumn("MA240 premium(%)", width=124, format="%.2f"),
             "六個月最低價": st.column_config.NumberColumn("六個月最低價", width=116, format="%.2f"),
             "最低價日期": st.column_config.TextColumn("最低價日期", width=104),
             "低點溢價(%)": st.column_config.NumberColumn("低點溢價(%)", width=112, format="%.2f"),
@@ -357,10 +393,12 @@ def render_watchlist_adder(result_df: pd.DataFrame, family_id: str, finmind_toke
     def _caption(selected: dict, chart_df: pd.DataFrame) -> str:
         selected_close = pd.to_numeric(selected.get("close"), errors="coerce")
         selected_ma60 = pd.to_numeric(selected.get("ma60"), errors="coerce")
+        selected_ma240 = pd.to_numeric(selected.get("ma240"), errors="coerce")
         selected_low = pd.to_numeric(selected.get("six_month_low"), errors="coerce")
         return (
             f"收盤 {format_watchlist_number(selected_close)}｜"
             f"季線 {format_watchlist_number(selected_ma60)}｜"
+            f"MA240 {format_watchlist_number(selected_ma240)}｜"
             f"六個月低點 {format_watchlist_number(selected_low)}"
         )
 
@@ -379,9 +417,10 @@ def render_watchlist_adder(result_df: pd.DataFrame, family_id: str, finmind_toke
             "avg_rev_yoy",
             "pe_ratio",
             "ma60",
+            "ma240",
             "six_month_low",
         ],
-        numeric_columns=["close", "avg_rev_yoy", "pe_ratio", "ma60", "six_month_low"],
+        numeric_columns=["close", "avg_rev_yoy", "pe_ratio", "ma60", "ma240", "six_month_low"],
         label_builder=_label,
         chart_loader=get_watchlist_chart_data,
         selectbox_key=f"double_dragon_watchlist_symbol_{result_df['strategy'].iloc[0]}",
@@ -396,7 +435,7 @@ render_meta_strip(
     [
         {"label": "共用條件", "value": "價量 + 營收 + EPS", "sub": "股價 > 60、成交量 > 1000"},
         {"label": "營收口徑", "value": "近兩個非二月月份", "sub": "遇 2 月改取更前一月"},
-        {"label": "龍騰升空", "value": "季線上方 30% 內", "sub": "PE <= 30"},
+        {"label": "龍騰升空", "value": "季線與年線上方 30% 內", "sub": "PE <= 30"},
         {"label": "潛龍在淵", "value": "六個月低點 20% 內", "sub": "PE <= 20"},
     ]
 )
@@ -424,7 +463,7 @@ with st.sidebar:
     st.caption(f"收盤成交量 > {VOL_LOT_MIN:,} 張")
     st.caption(f"近兩個非二月營收 YoY 平均 >= {AVG_REV_YOY_MIN:.0f}%")
     st.caption(f"近四季 EPS >= {TTM_EPS_MIN:.0f}")
-    st.caption(f"龍騰升空：收盤價 > 季線、<= 季線 * {1 + DRAGON_MA60_MAX_PREMIUM:.1f}、PE <= {DRAGON_PE_MAX:.0f}")
+    st.caption(f"龍騰升空：收盤價 > 季線、<= 季線 * {1 + DRAGON_MA60_MAX_PREMIUM:.1f}、<= 年線 * {1 + DRAGON_MA240_MAX_PREMIUM:.1f}、PE <= {DRAGON_PE_MAX:.0f}")
     st.caption(f"潛龍在淵：收盤價 <= 六個月最低點 * {1 + HIDDEN_DRAGON_LOW_MAX_PREMIUM:.1f}、PE <= {HIDDEN_DRAGON_PE_MAX:.0f}")
     run_btn = st.button("執行雙龍吐珠篩選", use_container_width=True, type="primary")
     if st.button("清除快取與結果", use_container_width=True):
@@ -492,7 +531,7 @@ if not run_btn:
 | 近兩月平均營收年增 | >= {AVG_REV_YOY_MIN:.0f}%（排除 2 月） | >= {AVG_REV_YOY_MIN:.0f}%（排除 2 月） |
 | 近四季 EPS | >= {TTM_EPS_MIN:.0f} | >= {TTM_EPS_MIN:.0f} |
 | PE | <= {DRAGON_PE_MAX:.0f} | <= {HIDDEN_DRAGON_PE_MAX:.0f} |
-| 技術位置 | 股價 > 季線，且 <= 季線 * {1 + DRAGON_MA60_MAX_PREMIUM:.1f} | 股價 <= 六個月最低點 * {1 + HIDDEN_DRAGON_LOW_MAX_PREMIUM:.1f} |
+| 技術位置 | 股價 > 季線，且 <= 季線 * {1 + DRAGON_MA60_MAX_PREMIUM:.1f}，且 <= 年線 * {1 + DRAGON_MA240_MAX_PREMIUM:.1f} | 股價 <= 六個月最低點 * {1 + HIDDEN_DRAGON_LOW_MAX_PREMIUM:.1f} |
 """
         )
     st.stop()
@@ -585,9 +624,9 @@ if df_common.empty:
     st.warning("沒有股票符合共用 EPS 條件與策略所需 PE 條件。")
     st.stop()
 
-progress.progress(68, text=f"準備查詢近 {HISTORY_MONTHS} 個月股價歷史：{len(df_common)} 檔...")
+progress.progress(68, text=f"準備查詢近 {PRICE_HISTORY_MONTHS} 個月股價歷史：{len(df_common)} 檔...")
 end_date = taipei_today()
-start_date = end_date - timedelta(days=int(HISTORY_MONTHS * 31))
+start_date = end_date - timedelta(days=int(PRICE_HISTORY_MONTHS * 31))
 start_str = start_date.strftime("%Y-%m-%d")
 end_str = end_date.strftime("%Y-%m-%d")
 
@@ -709,7 +748,7 @@ if df_history.empty:
 
 df_ready = df_common.merge(df_history, on="stock_id", how="inner")
 dragon_df, hidden_df = make_strategy_frames(df_ready)
-combined_df = pd.concat([dragon_df, hidden_df], ignore_index=True)
+combined_df = make_combined_strategy_frame(dragon_df, hidden_df)
 
 progress.progress(100, text="雙龍吐珠篩選完成")
 

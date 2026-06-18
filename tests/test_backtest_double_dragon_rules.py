@@ -62,6 +62,7 @@ def test_double_dragon_flags_are_data_driven_not_date_driven():
             "ttm_eps": [10.0, 8.0],
             "pe_ratio": [13.0, 13.75],
             "ma60": [120.0, 130.0],
+            "ma240": [110.0, 100.0],
             "six_month_low": [100.0, 100.0],
         }
     )
@@ -72,6 +73,27 @@ def test_double_dragon_flags_are_data_driven_not_date_driven():
     assert not result.loc[0, "is_dragon_hidden_pass"]
     assert not result.loc[1, "is_dragon_rise_pass"]
     assert result.loc[1, "is_dragon_hidden_pass"]
+
+
+def test_dragon_rise_requires_price_within_year_line_premium():
+    df = pd.DataFrame(
+        {
+            "stock_id": ["1111"],
+            "close": [150.0],
+            "vol_lot": [1500.0],
+            "avg_rev_yoy": [25.0],
+            "ttm_eps": [10.0],
+            "pe_ratio": [15.0],
+            "ma60": [120.0],
+            "ma240": [100.0],
+            "six_month_low": [100.0],
+        }
+    )
+
+    result = apply_double_dragon_flags(df)
+
+    assert result.loc[0, "is_common_pass"]
+    assert not result.loc[0, "is_dragon_rise_pass"]
 
 
 def test_candidate_universe_filters_price_volume_before_revenue_join():
@@ -155,9 +177,11 @@ def test_snapshot_returns_only_common_passed_rows():
                 "close": row["close"],
                 "vol_lot": row["vol_lot"],
                 "ma60": 100.0,
+                "ma240": 100.0,
                 "six_month_low": 100.0,
                 "six_month_low_date": "2026-01-01",
                 "ma60_premium_pct": 20.0,
+                "ma240_premium_pct": 20.0,
                 "low_premium_pct": 20.0,
                 "history_days": 120,
                 "avg_rev_yoy": row["avg_rev_yoy"],
@@ -173,6 +197,7 @@ def test_snapshot_returns_only_common_passed_rows():
             snapshot, result_diagnostics = build_double_dragon_snapshot(date(2026, 3, 18))
 
     assert snapshot["stock_id"].tolist() == ["1111"]
+    assert snapshot.loc[0, "branch_label"] == "雙龍合璧"
     assert result_diagnostics.common_passed == 1
     assert result_diagnostics.common_failed == 1
 

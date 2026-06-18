@@ -14,6 +14,7 @@ class DoubleDragonThresholds:
     ttm_eps_min: float = 5.0
     dragon_pe_max: float = 30.0
     dragon_ma60_max_premium: float = 0.30
+    dragon_ma240_max_premium: float = 0.30
     hidden_dragon_pe_max: float = 20.0
     hidden_dragon_low_max_premium: float = 0.20
 
@@ -48,7 +49,7 @@ def latest_complete_revenue_ym(as_of_date: date | datetime | str) -> str:
     return f"{previous_month.year - 1911}{previous_month.month:02d}"
 
 
-def price_window_start(as_of_date: date | datetime | str, months: int = 6) -> date:
+def price_window_start(as_of_date: date | datetime | str, months: int = 12) -> date:
     current = normalize_as_of_date(as_of_date)
     return current - timedelta(days=int(months * 31) + 45)
 
@@ -132,10 +133,15 @@ def calc_price_metrics(
         return None
 
     snapshot = df.iloc[-1]
-    low_idx = df["low"].idxmin()
+    low_window_start = current - timedelta(days=int(6 * 31))
+    low_df = df[df["date"] >= low_window_start]
+    if low_df.empty:
+        low_df = df
+    low_idx = low_df["low"].idxmin()
     low_row = df.loc[low_idx]
     close = float(snapshot["close"])
     ma60 = float(df["close"].tail(60).mean())
+    ma240 = float(df["close"].tail(240).mean()) if len(df) >= 240 else pd.NA
     six_month_low = float(low_row["low"])
     vol_lot = float(snapshot["volume"]) / 1000 if pd.notna(snapshot.get("volume")) else pd.NA
 
@@ -147,9 +153,11 @@ def calc_price_metrics(
         "close": close,
         "vol_lot": vol_lot,
         "ma60": ma60,
+        "ma240": ma240,
         "six_month_low": six_month_low,
         "six_month_low_date": pd.to_datetime(low_row["date"]).strftime("%Y-%m-%d"),
         "ma60_premium_pct": (close / ma60 - 1) * 100 if ma60 > 0 else pd.NA,
+        "ma240_premium_pct": (close / ma240 - 1) * 100 if pd.notna(ma240) and ma240 > 0 else pd.NA,
         "low_premium_pct": (close / six_month_low - 1) * 100 if six_month_low > 0 else pd.NA,
         "history_days": len(df),
     }
@@ -180,7 +188,7 @@ def apply_double_dragon_flags(
     thresholds: DoubleDragonThresholds = DEFAULT_THRESHOLDS,
 ) -> pd.DataFrame:
     result = df.copy()
-    for column in ("close", "vol_lot", "avg_rev_yoy", "ttm_eps", "pe_ratio", "ma60", "six_month_low"):
+    for column in ("close", "vol_lot", "avg_rev_yoy", "ttm_eps", "pe_ratio", "ma60", "ma240", "six_month_low"):
         result[column] = pd.to_numeric(result.get(column), errors="coerce")
 
     result["is_common_pass"] = (
@@ -193,6 +201,7 @@ def apply_double_dragon_flags(
         result["is_common_pass"]
         & (result["close"] > result["ma60"])
         & (result["close"] <= result["ma60"] * (1 + thresholds.dragon_ma60_max_premium))
+        & (result["close"] <= result["ma240"] * (1 + thresholds.dragon_ma240_max_premium))
         & (result["pe_ratio"] <= thresholds.dragon_pe_max)
     )
     result["is_dragon_hidden_pass"] = (
