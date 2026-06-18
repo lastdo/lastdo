@@ -15,6 +15,15 @@ MOPS_MARKETS = ("sii", "otc")
 MOPS_COMPANY_TYPES = (0, 1)
 MOPS_REVENUE_COLUMNS = ["stock_id", "rev_ym", "rev_yoy", "rev_cur", "rev_ly"]
 
+MOPS_FIELD_ALIASES = {
+    "stock_id": (("\u516c\u53f8", "\u4ee3\u865f"),),
+    "company_name": (("\u516c\u53f8\u540d\u7a31",),),
+    "revenue": (("\u71df\u696d\u6536\u5165", "\u7576\u6708\u71df\u6536"),),
+    "revenue_last_year": (("\u71df\u696d\u6536\u5165", "\u53bb\u5e74\u7576\u6708\u71df\u6536"),),
+    "yoy_change": (("\u71df\u696d\u6536\u5165", "\u53bb\u5e74\u540c\u6708", "\u589e\u6e1b"),),
+    "comment": (("\u5099\u8a3b",),),
+}
+
 
 def _empty_revenue_frame(errors: list[str] | None = None) -> pd.DataFrame:
     df = pd.DataFrame(columns=MOPS_REVENUE_COLUMNS)
@@ -42,6 +51,57 @@ def previous_revenue_ym(ym: str) -> str:
         roc_year -= 1
         month = 12
     return f"{roc_year}{month:02d}"
+
+
+def _clean_mops_column_text(value: object) -> str:
+    text = str(value)
+    for token in ("Unnamed:", "_level_", "nan", "None"):
+        text = text.replace(token, "")
+    for whitespace in ("\u3000", "\xa0", "\n", "\r", "\t", " "):
+        text = text.replace(whitespace, "")
+    return text.strip()
+
+
+def _flatten_mops_column(column: object) -> str:
+    if isinstance(column, tuple):
+        return "".join(_clean_mops_column_text(part) for part in column)
+    return _clean_mops_column_text(column)
+
+
+def _find_mops_column(columns: Iterable[object], aliases: tuple[tuple[str, ...], ...]) -> object | None:
+    flattened = [(column, _flatten_mops_column(column)) for column in columns]
+    for alias in aliases:
+        needles = [_clean_mops_column_text(part) for part in alias]
+        for column, text in flattened:
+            if all(needle in text for needle in needles):
+                return column
+    return None
+
+
+def _parse_mops_revenue_tables(dfs: list[pd.DataFrame]) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    for df in dfs:
+        if df.empty or df.shape[1] < 5:
+            continue
+
+        selected: dict[str, object] = {}
+        for field, aliases in MOPS_FIELD_ALIASES.items():
+            column = _find_mops_column(df.columns, aliases)
+            if column is not None:
+                selected[field] = column
+
+        required = {"stock_id", "company_name", "revenue", "revenue_last_year", "yoy_change"}
+        if not required.issubset(selected):
+            continue
+
+        parsed = pd.DataFrame({field: df[column] for field, column in selected.items()})
+        parsed = parsed[parsed["stock_id"].astype(str).str.strip().str.fullmatch(r"\d{4}", na=False)]
+        if not parsed.empty:
+            frames.append(parsed)
+
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
 
 
 def _normalize_revenue_frame(raw: object, market: str, company_type: int, ym: str) -> pd.DataFrame:
@@ -125,7 +185,7 @@ def _fetch_market_revenue_with_redirects(
     response.raise_for_status()
     response.encoding = "big5"
     dfs = pd.read_html(StringIO(response.text))
-    return fetcher._parse_revenue_tables(dfs, roc_year, month)
+    return _parse_mops_revenue_tables(dfs)
 
 
 def fetch_mops_month_revenue_frame(
@@ -142,21 +202,21 @@ def fetch_mops_month_revenue_frame(
     for market in markets:
         for company_type in company_types:
             try:
-                raw = fetcher.get_market_revenue(int(roc_year), int(month), str(market), int(company_type))
+                raw = _fetch_market_revenue_with_redirects(
+                    fetcher,
+                    int(roc_year),
+                    int(month),
+                    str(market),
+                    int(company_type),
+                )
             except Exception as primary_exc:
                 try:
-                    raw = _fetch_market_revenue_with_redirects(
-                        fetcher,
-                        int(roc_year),
-                        int(month),
-                        str(market),
-                        int(company_type),
-                    )
+                    raw = fetcher.get_market_revenue(int(roc_year), int(month), str(market), int(company_type))
                 except Exception as fallback_exc:
                     errors.append(
                         f"{ym} {market}/{company_type}: "
-                        f"primary {type(primary_exc).__name__}: {primary_exc}; "
-                        f"fallback {type(fallback_exc).__name__}: {fallback_exc}"
+                        f"direct {type(primary_exc).__name__}: {primary_exc}; "
+                        f"twmops {type(fallback_exc).__name__}: {fallback_exc}"
                     )
                     continue
             frame = _normalize_revenue_frame(raw, str(market), int(company_type), ym)
