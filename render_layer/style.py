@@ -3,6 +3,8 @@ import html
 
 import streamlit as st
 
+from render_layer.navigation import render_global_navigation
+
 
 _CSS = """
 <style>
@@ -751,71 +753,3 @@ def render_meta_strip(items: list[dict]) -> None:
         unsafe_allow_html=True,
     )
 
-
-def render_global_navigation(current_page: str) -> None:
-    """Render the shared sidebar navigation used across all pages."""
-    nav_items = [
-        ("inventory", "💼 庫存股總覽", "Inventory.py"),
-        ("app_tw", "📊 AI 台股分析", "pages/1_app_tw.py"),
-        ("analysis_history", "🕘 分析歷史", "pages/2_analysis_history.py"),
-        ("growth_screener", "📈 成長股篩選", "pages/3_growth_screener.py"),
-        ("bottom_screener", "🌱 底部剛起漲", "pages/5_bottom_screener.py"),
-    ]
-
-    labels = {
-        "inventory": "💼 庫存股管理",
-        "app_tw": "📊 AI 台股分析",
-        "analysis_history": "🕘 分析歷史",
-        "growth_screener": "📈 成長股篩選",
-        "bottom_screener": "🌱 底部剛起漲",
-    }
-
-    st.header("功能導覽")
-    st.caption("這裡是主入口，可直接切換到分析、歷史與各種選股頁。")
-
-    for page_key, label, target in nav_items:
-        is_current = current_page == page_key
-        if st.button(
-            label,
-            use_container_width=True,
-            type="primary" if is_current else "secondary",
-            key=f"nav_{page_key}",
-            disabled=is_current,
-        ):
-            st.switch_page(target)
-
-
-def render_global_navigation(current_page: str) -> None:
-    """Render the shared sidebar navigation used across all pages."""
-    nav_items = [
-        ("inventory", "庫存管理", "Inventory.py"),
-        ("app_tw", "AI 台股分析", "pages/1_app_tw.py"),
-        ("analysis_history", "分析紀錄", "pages/2_analysis_history.py"),
-        ("growth_screener", "雙龍吐珠", "pages/3_growth_screener.py"),
-        ("strategy_backtest", "雙龍吐珠策略回測", "pages/6_strategy_backtest.py"),
-    ]
-
-    labels = {
-        "inventory": "庫存管理",
-        "app_tw": "AI 台股分析",
-        "analysis_history": "分析紀錄",
-        "growth_screener": "雙龍吐珠",
-        "strategy_backtest": "雙龍吐珠策略回測",
-    }
-
-    st.header("功能導覽")
-    st.caption("選擇要使用的分析工具。")
-
-    for page_key, label, target in nav_items:
-        is_current = current_page == page_key
-        if st.button(
-            label,
-            use_container_width=True,
-            type="primary" if is_current else "secondary",
-            key=f"nav_{page_key}",
-            disabled=is_current,
-        ):
-            st.switch_page(target)
-
-    st.markdown("---")
-    st.caption(f"目前頁面：{labels.get(current_page, current_page)}")
