@@ -14,6 +14,14 @@ def _date_text(value: date | datetime | str) -> str:
     return pd.to_datetime(value).strftime("%Y-%m-%d")
 
 
+def _result_payload(response: requests.Response) -> dict:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def fetch_finmind_dataset_frame(
     dataset: str,
     data_id: str | None = None,
@@ -38,16 +46,17 @@ def fetch_finmind_dataset_frame(
         time.sleep(sleep_seconds)
 
     response = requests.get(FINMIND_URL, params=params, timeout=timeout)
-    response.raise_for_status()
-    result = response.json()
-    status_code = get_status_code(result)
+    result = _result_payload(response)
+    status_code = get_status_code(result) or response.status_code
     msg = get_result_message(result)
     retry_after = get_retry_after(result)
 
-    if is_rate_limited(result):
+    if response.status_code in (402, 403, 429) or is_rate_limited(result):
         if raise_on_rate_limit:
             raise RuntimeError(f"FINMIND_LIMIT:{status_code}:{retry_after}:{msg}")
         return pd.DataFrame(), status_code, msg, retry_after
+    if response.status_code >= 400:
+        response.raise_for_status()
     if status_code != 200 or not result.get("data"):
         return pd.DataFrame(), status_code, msg, retry_after
     return pd.DataFrame(result["data"]), status_code, msg, retry_after
