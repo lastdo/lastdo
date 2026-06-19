@@ -5,7 +5,7 @@ import pandas as pd
 from datetime import timedelta
 from dotenv import load_dotenv
 from data_layer.time_utils import taipei_now, taipei_today
-from data_layer.finmind_api import fetch_finmind_price_frame
+from data_layer.historical_price_service import clean_price_history, fetch_cached_finmind_price_history
 from data_layer.institutional_flow import (
     fetch_tpex_3insti as fetch_tpex_3insti_shared,
     fetch_twse_3insti as fetch_twse_3insti_shared,
@@ -315,7 +315,7 @@ def get_finmind_price_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
     today = taipei_today()
     start_date = (today - timedelta(days=220)).strftime("%Y-%m-%d")
     try:
-        df, status_code, _msg, _retry_after = fetch_finmind_price_frame(
+        df, status_code, _msg, _retry_after = fetch_cached_finmind_price_history(
             symbol,
             start_date,
             today.strftime("%Y-%m-%d"),
@@ -326,7 +326,7 @@ def get_finmind_price_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
         )
         if status_code != 200 or df.empty or "close" not in df.columns:
             return pd.DataFrame()
-        df = df.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
+        df = clean_price_history(df, required_columns=("date", "close"))
         if df.empty:
             return pd.DataFrame()
         df["ma20"] = df["close"].rolling(20, min_periods=1).mean()

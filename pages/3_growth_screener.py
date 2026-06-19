@@ -15,7 +15,7 @@ from data_layer.data_diagnostics import (
     make_finmind_diagnostic,
 )
 from data_layer.export_utils import dataframe_to_csv_bytes
-from data_layer.finmind_api import fetch_finmind_price_frame
+from data_layer.historical_price_service import clean_price_history, fetch_cached_finmind_price_history
 from data_layer.market_api import (
     fetch_json_tpex as fetch_json_tpex_base,
     fetch_latest_twse_price_rows,
@@ -76,7 +76,7 @@ def fetch_mops_recent_revenue(latest_ym: str, months: int, cache_version: str) -
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token: str = "") -> pd.DataFrame:
-    df, status_code, msg, retry_after = fetch_finmind_price_frame(
+    df, status_code, msg, retry_after = fetch_cached_finmind_price_history(
         symbol,
         start_date,
         end_date,
@@ -90,7 +90,7 @@ def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token
     if status_code != 200 or df.empty:
         return pd.DataFrame()
 
-    df = df.dropna(subset=["date", "low", "close"]).sort_values("date").reset_index(drop=True)
+    df = clean_price_history(df, required_columns=("date", "low", "close"))
     return df[["date", "open", "high", "low", "close", "volume"]]
 
 
@@ -100,7 +100,7 @@ def get_watchlist_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
     start_date = (today - timedelta(days=220)).strftime("%Y-%m-%d")
     end_date = today.strftime("%Y-%m-%d")
     try:
-        df, status_code, _msg, _retry_after = fetch_finmind_price_frame(
+        df, status_code, _msg, _retry_after = fetch_cached_finmind_price_history(
             symbol,
             start_date,
             end_date,
@@ -111,7 +111,7 @@ def get_watchlist_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
         )
         if status_code != 200 or df.empty:
             return pd.DataFrame()
-        df = df.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
+        df = clean_price_history(df, required_columns=("date", "close"))
         df["ma60"] = pd.to_numeric(df["close"], errors="coerce").rolling(60, min_periods=1).mean()
         return df.tail(120).reset_index(drop=True)
     except Exception:

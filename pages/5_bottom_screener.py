@@ -12,9 +12,7 @@ from data_layer.data_diagnostics import (
     fetch_json_with_diagnostic,
     make_finmind_diagnostic,
 )
-from data_layer.finmind_api import (
-    fetch_finmind_price_frame,
-)
+from data_layer.historical_price_service import clean_price_history, fetch_cached_finmind_price_history
 from data_layer.market_data import build_latest_revenue_view, build_price_snapshot
 from data_layer.mops_revenue import fetch_mops_recent_revenue_frame, latest_revenue_ym
 from data_layer.market_api import (
@@ -355,7 +353,7 @@ def get_bottom_watchlist_chart_data(symbol: str, token: str = "") -> pd.DataFram
     start_date = (today - timedelta(days=220)).strftime("%Y-%m-%d")
     end_date = today.strftime("%Y-%m-%d")
     try:
-        df, status_code, _msg, _retry_after = fetch_finmind_price_frame(
+        df, status_code, _msg, _retry_after = fetch_cached_finmind_price_history(
             symbol,
             start_date,
             end_date,
@@ -366,7 +364,7 @@ def get_bottom_watchlist_chart_data(symbol: str, token: str = "") -> pd.DataFram
         )
         if status_code != 200 or df.empty:
             return pd.DataFrame()
-        df = df.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
+        df = clean_price_history(df, required_columns=("date", "close"))
         return df.tail(120).reset_index(drop=True)
     except Exception:
         return pd.DataFrame()
@@ -474,7 +472,7 @@ def fetch_mops_recent_revenue(latest_ym: str, months: int) -> pd.DataFrame:
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token: str = "") -> pd.DataFrame:
-    df, status_code, msg, retry_after = fetch_finmind_price_frame(
+    df, status_code, msg, retry_after = fetch_cached_finmind_price_history(
         symbol,
         start_date,
         end_date,
@@ -487,7 +485,7 @@ def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token
         raise RuntimeError(f"FINMIND_LIMIT:{status_code}:{retry_after}:{msg}")
     if status_code != 200 or df.empty:
         return pd.DataFrame()
-    df = df.dropna(subset=["date", "low", "close"]).sort_values("date").reset_index(drop=True)
+    df = clean_price_history(df, required_columns=("date", "low", "close"))
     return df[["date", "open", "high", "low", "close", "volume"]]
 
 

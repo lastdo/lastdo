@@ -17,6 +17,8 @@ class ReleaseGuardrailTests(unittest.TestCase):
             ROOT / "pages" / "4_chip_screener.py",
             ROOT / "pages" / "5_bottom_screener.py",
             ROOT / "pages" / "6_strategy_backtest.py",
+            ROOT / "data_layer" / "historical_price_service.py",
+            ROOT / "render_layer" / "navigation.py",
             ROOT / "render_layer" / "style.py",
             ROOT / "render_layer" / "watchlist.py",
             ROOT / "render_layer" / "diagnostics.py",
@@ -46,6 +48,12 @@ class ReleaseGuardrailTests(unittest.TestCase):
         self.assertIn('div[data-testid="stMetric"] *', style)
         self.assertIn('section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] *', style)
         self.assertIn("color: var(--text-on-dark) !important", style)
+
+    def test_global_navigation_keeps_stock_screeners(self):
+        navigation = (ROOT / "render_layer" / "navigation.py").read_text(encoding="utf-8")
+
+        self.assertIn("pages/4_chip_screener.py", navigation)
+        self.assertIn("pages/5_bottom_screener.py", navigation)
 
     def test_ai_report_keeps_expected_sections(self):
         page = (ROOT / "pages" / "1_app_tw.py").read_text(encoding="utf-8")
