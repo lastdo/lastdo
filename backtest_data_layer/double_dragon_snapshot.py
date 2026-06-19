@@ -216,6 +216,7 @@ def build_double_dragon_snapshot(
                         price_failed.append(stock_id)
                     status, payload = "failed", stock_id
                 except Exception:
+                    price_failed.append(stock_id)
                     status, payload = "failed", stock_id
 
                 if status == "ok" and isinstance(payload, dict):

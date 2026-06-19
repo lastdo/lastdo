@@ -208,15 +208,22 @@ def calc_history_row(row: pd.Series, history_df: pd.DataFrame) -> dict | None:
 
 def parse_finmind_retry_seconds(error_msg: str):
     parts = str(error_msg).split(":", 3)
-    numeric_parts = []
-    for part in parts[1:]:
-        try:
-            numeric_parts.append(max(int(float(part)), 0))
-        except Exception:
-            continue
-    if not numeric_parts:
+    if len(parts) < 3:
         return None
-    return numeric_parts[1] if len(numeric_parts) >= 2 else numeric_parts[0]
+    try:
+        return max(int(float(parts[2])), 0)
+    except Exception:
+        return None
+
+
+def parse_finmind_limit_status(error_msg: str):
+    parts = str(error_msg).split(":", 3)
+    if len(parts) < 2:
+        return None
+    try:
+        return int(float(parts[1]))
+    except Exception:
+        return None
 
 
 def format_wait_time(seconds):
@@ -701,12 +708,14 @@ with ThreadPoolExecutor(max_workers=3) as executor:
 
 if rate_limit_msg and not history_rows:
     retry_seconds = parse_finmind_retry_seconds(rate_limit_msg)
+    status_code = parse_finmind_limit_status(rate_limit_msg) or 429
     data_diagnostics.append(
         make_finmind_diagnostic(
             "FinMind 歷史股價",
-            429,
+            status_code,
             rate_limit_msg,
             records=0,
+            retry_after=retry_seconds,
             sample_ids=history_failed[:10],
         )
     )
@@ -716,12 +725,15 @@ if rate_limit_msg and not history_rows:
     st.stop()
 
 if rate_limit_msg:
+    retry_seconds = parse_finmind_retry_seconds(rate_limit_msg)
+    status_code = parse_finmind_limit_status(rate_limit_msg) or 429
     data_diagnostics.append(
         make_finmind_diagnostic(
             "FinMind 歷史股價",
-            429,
+            status_code,
             rate_limit_msg,
             records=len(history_rows),
+            retry_after=retry_seconds,
             sample_ids=history_failed[:10],
         )
     )

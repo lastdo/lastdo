@@ -26,6 +26,7 @@ class ReleaseGuardrailTests(unittest.TestCase):
             ROOT / "backtest_data_layer" / "double_dragon_snapshot.py",
             ROOT / "backtest_data_layer" / "finmind_sources.py",
             ROOT / "backtest_data_layer" / "historical_prices.py",
+            ROOT / "backtest_data_layer" / "supabase_store.py",
             ROOT / "backtest_render_layer" / "__init__.py",
             ROOT / "backtest_render_layer" / "double_dragon_tables.py",
         ]

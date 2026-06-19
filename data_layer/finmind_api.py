@@ -5,15 +5,28 @@ import time
 from data_layer.app_common import FINMIND_URL
 
 
+def _result_payload(response: requests.Response) -> dict:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if isinstance(payload, dict):
+        return payload
+    return {}
+
+
 def fetch_finmind_result(params: dict, timeout: int = 20) -> dict:
     last_exc = None
     for attempt in range(3):
         try:
             resp = requests.get(FINMIND_URL, params=params, timeout=timeout)
-            resp.raise_for_status()
-            result = resp.json()
-            if not is_rate_limited(result):
+            result = _result_payload(resp)
+            if not result and resp.status_code >= 400:
+                result = {"status": resp.status_code, "msg": getattr(resp, "text", "")}
+            if resp.status_code in (402, 403, 429) or is_rate_limited(result):
                 return result
+            if resp.status_code >= 400:
+                resp.raise_for_status()
             return result
         except Exception as exc:
             last_exc = exc
@@ -33,7 +46,7 @@ def get_result_message(result: dict) -> str:
 def is_rate_limited(result: dict) -> bool:
     status_code = get_status_code(result)
     msg = get_result_message(result).lower()
-    return status_code in (402, 403, 429) or "ban" in msg or "rate" in msg
+    return status_code in (402, 403, 429) or "ban" in msg or "rate" in msg or "limit" in msg
 
 
 def get_retry_after(result: dict):

@@ -202,6 +202,52 @@ def test_snapshot_returns_only_common_passed_rows():
     assert result_diagnostics.common_failed == 1
 
 
+def test_snapshot_surfaces_finmind_rate_limit_in_diagnostics():
+    universe = pd.DataFrame(
+        {
+            "stock_id": ["1111"],
+            "stock_name": ["A"],
+            "market": ["TWSE"],
+            "close": [120.0],
+            "vol_lot": [1500.0],
+            "price_date": ["2026-03-18"],
+            "avg_rev_yoy": [30.0],
+            "rev_months": ["11501/11412"],
+            "rev_ym": ["11501"],
+            "rev_yoy": [30.0],
+            "rev_cur": [100],
+            "rev_ly": [80],
+            "latest_rev_yoy": [30.0],
+            "prev_rev_yoy": [30.0],
+        }
+    )
+    diagnostics = SnapshotDiagnostics(
+        stock_count=1,
+        price_rows=1,
+        price_volume_candidates=1,
+        revenue_month_start="11502",
+        revenue_rows=1,
+        revenue_candidates=1,
+        common_passed=0,
+        common_failed=0,
+        processed=0,
+        price_failed=(),
+        eps_failed=(),
+    )
+
+    with patch("backtest_data_layer.double_dragon_snapshot.load_candidate_universe", return_value=(universe, diagnostics)):
+        with patch(
+            "backtest_data_layer.double_dragon_snapshot._build_stock_snapshot",
+            side_effect=RuntimeError("FINMIND_LIMIT:402:60:Requests reach the upper limit."),
+        ):
+            snapshot, result_diagnostics = build_double_dragon_snapshot(date(2026, 3, 18))
+
+    assert snapshot.empty
+    assert result_diagnostics.processed == 1
+    assert result_diagnostics.price_failed == ()
+    assert result_diagnostics.rate_limit_error == "FINMIND_LIMIT:402:60:Requests reach the upper limit."
+
+
 def test_display_columns_do_not_expose_internal_booleans():
     assert "is_common_pass" not in DISPLAY_COLUMNS
     assert "is_dragon_rise_pass" not in DISPLAY_COLUMNS
