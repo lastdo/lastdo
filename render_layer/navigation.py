@@ -9,6 +9,7 @@ NAV_ITEMS = [
     ("app_tw", "AI 台股分析", "pages/1_app_tw.py"),
     ("analysis_history", "分析紀錄", "pages/2_analysis_history.py"),
     ("growth_screener", "雙龍吐珠", "pages/3_growth_screener.py"),
+    ("momentum_screener", "小型飆股起漲策略", "pages/7_momentum_screener.py"),
     ("chip_screener", "法人重壓股", "pages/4_chip_screener.py"),
     ("bottom_screener", "底部剛起漲", "pages/5_bottom_screener.py"),
     ("strategy_backtest", "雙龍吐珠策略回測", "pages/6_strategy_backtest.py"),

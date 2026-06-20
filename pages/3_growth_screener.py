@@ -97,7 +97,7 @@ def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_watchlist_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
     today = taipei_today()
-    start_date = (today - timedelta(days=220)).strftime("%Y-%m-%d")
+    start_date = (today - timedelta(days=430)).strftime("%Y-%m-%d")
     end_date = today.strftime("%Y-%m-%d")
     try:
         df, status_code, _msg, _retry_after = fetch_cached_finmind_price_history(
@@ -113,7 +113,8 @@ def get_watchlist_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
             return pd.DataFrame()
         df = clean_price_history(df, required_columns=("date", "close"))
         df["ma60"] = pd.to_numeric(df["close"], errors="coerce").rolling(60, min_periods=1).mean()
-        return df.tail(120).reset_index(drop=True)
+        df["ma240"] = pd.to_numeric(df["close"], errors="coerce").rolling(240, min_periods=240).mean()
+        return df.tail(180).reset_index(drop=True)
     except Exception:
         return pd.DataFrame()
 
