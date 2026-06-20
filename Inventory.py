@@ -14,6 +14,7 @@ from data_layer.data_diagnostics import (
 from data_layer.market_api import fetch_json_tpex, fetch_latest_twse_price_rows
 from data_layer.time_utils import taipei_date_string
 from data_layer.portfolio_store import (
+    PortfolioStoreConnectionError,
     create_portfolio_item,
     delete_portfolio_item,
     get_default_family_id,
@@ -947,7 +948,12 @@ stock_names = {
 }
 analysis_index = load_analysis_index()
 store_status = get_store_status()
-known_family_ids = list_family_ids()
+portfolio_store_error = ""
+try:
+    known_family_ids = list_family_ids()
+except PortfolioStoreConnectionError as exc:
+    known_family_ids = []
+    portfolio_store_error = str(exc)
 store_label = "Google Sheets" if store_status.using_google_sheets else "Local JSON"
 with st.sidebar:
     render_global_navigation("inventory")
@@ -989,7 +995,16 @@ family_id = st.session_state.get("inventory_family_id", get_default_family_id())
 if not FAMILY_ID_PATTERN.fullmatch(family_id):
     st.error("family_id 格式錯誤：只允許英數、底線(_)與減號(-)，長度 1-64。")
     st.stop()
-portfolio = load_portfolio_items(family_id)
+try:
+    portfolio = load_portfolio_items(family_id)
+except PortfolioStoreConnectionError as exc:
+    portfolio_store_error = str(exc)
+    portfolio = []
+
+if portfolio_store_error and store_status.using_google_sheets:
+    st.error(portfolio_store_error)
+    st.info("請到 Streamlit secrets 檢查 GOOGLE_SHEETS_PORTFOLIO_SPREADSHEET_ID、GOOGLE_SHEETS_PORTFOLIO_WORKSHEET 與服務帳號是否已加入試算表共用名單。")
+    st.stop()
 
 # ── 頁首橫幅 ─────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -1194,16 +1209,20 @@ if submitted:
             shares_val = int(new_shares.strip()) if new_shares.strip() else None
         except ValueError:
             shares_val = None
-        create_portfolio_item(
-            family_id=family_id,
-            stock_id=new_symbol,
-            avg_cost=price_val,
-            shares=shares_val,
-            stock_name=stock_names.get(new_symbol, ""),
-        )
-        item_type = "持股" if price_val and shares_val else "自選股"
-        st.success(f"✅ 已新增「{new_symbol}」{stock_names.get(new_symbol, '')} 至{item_type}清單")
-        st.rerun()
+        try:
+            create_portfolio_item(
+                family_id=family_id,
+                stock_id=new_symbol,
+                avg_cost=price_val,
+                shares=shares_val,
+                stock_name=stock_names.get(new_symbol, ""),
+            )
+        except PortfolioStoreConnectionError as exc:
+            st.error(str(exc))
+        else:
+            item_type = "持股" if price_val and shares_val else "自選股"
+            st.success(f"✅ 已新增「{new_symbol}」{stock_names.get(new_symbol, '')} 至{item_type}清單")
+            st.rerun()
 
 # ── 快速篩選 ──────────────────────────────────────────────────────────────────
 render_section_title("快速篩選")
@@ -1492,14 +1511,18 @@ else:
                         label_visibility="collapsed",
                     )
                 if st.button("儲存", key=f"save_{row_key}", use_container_width=True):
-                    update_portfolio_record(
-                        row_id=row_id,
-                        family_id=family_id,
-                        avg_cost=edit_price if edit_price > 0 else None,
-                        shares=edit_shares if edit_shares > 0 else None,
-                    )
-                    st.toast(f"已更新「{symbol}」的持股資料")
-                    st.rerun()
+                    try:
+                        update_portfolio_record(
+                            row_id=row_id,
+                            family_id=family_id,
+                            avg_cost=edit_price if edit_price > 0 else None,
+                            shares=edit_shares if edit_shares > 0 else None,
+                        )
+                    except PortfolioStoreConnectionError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.toast(f"已更新「{symbol}」的持股資料")
+                        st.rerun()
             with c5:
                 btn_col1, btn_col2 = st.columns([3, 1])
                 with btn_col1:
@@ -1508,8 +1531,12 @@ else:
                         st.switch_page("pages/1_app_tw.py")
                 with btn_col2:
                     if st.button("🗑️", key=f"del_{row_key}", help=f"移除 {symbol}"):
-                        delete_portfolio_item(row_id=row_id, family_id=family_id)
-                        st.toast(f"✅ 已移除「{symbol}」")
-                        st.rerun()
+                        try:
+                            delete_portfolio_item(row_id=row_id, family_id=family_id)
+                        except PortfolioStoreConnectionError as exc:
+                            st.error(str(exc))
+                        else:
+                            st.toast(f"✅ 已移除「{symbol}」")
+                            st.rerun()
 
             st.markdown("<hr class='row-divider'>", unsafe_allow_html=True)

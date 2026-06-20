@@ -61,6 +61,10 @@ class PortfolioStoreStatus:
     message: str = ""
 
 
+class PortfolioStoreConnectionError(RuntimeError):
+    """Raised when the configured Google Sheets portfolio store is unavailable."""
+
+
 def _secrets() -> dict[str, Any]:
     try:
         return dict(st.secrets)
@@ -223,11 +227,16 @@ def _get_worksheet():
     spreadsheet_id = str(secrets.get("GOOGLE_SHEETS_PORTFOLIO_SPREADSHEET_ID", "")).strip()
     worksheet_name = str(secrets.get("GOOGLE_SHEETS_PORTFOLIO_WORKSHEET", "holdings")).strip()
 
-    credentials = Credentials.from_service_account_info(creds_info, scopes=GOOGLE_SCOPES)
-    client = gspread.authorize(credentials)
-    worksheet = client.open_by_key(spreadsheet_id).worksheet(worksheet_name)
-    _ensure_headers(worksheet)
-    return worksheet
+    try:
+        credentials = Credentials.from_service_account_info(creds_info, scopes=GOOGLE_SCOPES)
+        client = gspread.authorize(credentials)
+        worksheet = client.open_by_key(spreadsheet_id).worksheet(worksheet_name)
+        _ensure_headers(worksheet)
+        return worksheet
+    except Exception as exc:
+        raise PortfolioStoreConnectionError(
+            "Google Sheets 庫存資料暫時無法連線，請確認試算表 ID、工作表名稱與服務帳號權限。"
+        ) from exc
 
 
 def _ensure_headers(worksheet) -> None:
@@ -238,7 +247,12 @@ def _ensure_headers(worksheet) -> None:
 
 def _sheet_records() -> list[dict[str, Any]]:
     worksheet = _get_worksheet()
-    return worksheet.get_all_records(expected_headers=WORKSHEET_HEADERS)
+    try:
+        return worksheet.get_all_records(expected_headers=WORKSHEET_HEADERS)
+    except Exception as exc:
+        raise PortfolioStoreConnectionError(
+            "Google Sheets 庫存資料暫時無法讀取，請稍後重試或檢查試算表權限。"
+        ) from exc
 
 
 def _sheet_row_values(row: dict[str, Any]) -> list[Any]:
@@ -265,7 +279,12 @@ def _sheet_row_to_record(row_values: list[Any]) -> dict[str, Any]:
 
 
 def _find_sheet_row(worksheet, row_id: str, family_id: str) -> tuple[int, dict[str, Any]] | None:
-    all_values = worksheet.get_all_values()
+    try:
+        all_values = worksheet.get_all_values()
+    except Exception as exc:
+        raise PortfolioStoreConnectionError(
+            "Google Sheets 庫存資料暫時無法讀取，請稍後重試或檢查試算表權限。"
+        ) from exc
     if not all_values or len(all_values) < 2:
         return None
 
@@ -277,13 +296,23 @@ def _find_sheet_row(worksheet, row_id: str, family_id: str) -> tuple[int, dict[s
 
 
 def _update_sheet_row(worksheet, row_index: int, row: dict[str, Any]) -> None:
-    worksheet.update(values=[_sheet_row_values(row)], range_name=f"A{row_index}:J{row_index}")
+    try:
+        worksheet.update(values=[_sheet_row_values(row)], range_name=f"A{row_index}:J{row_index}")
+    except Exception as exc:
+        raise PortfolioStoreConnectionError(
+            "Google Sheets 庫存資料暫時無法寫入，請稍後重試或檢查試算表權限。"
+        ) from exc
 
 
 def _write_sheet_rows(rows: list[dict[str, Any]]) -> None:
     worksheet = _get_worksheet()
-    for row in rows:
-        worksheet.append_row(_sheet_row_values(row), value_input_option="USER_ENTERED")
+    try:
+        for row in rows:
+            worksheet.append_row(_sheet_row_values(row), value_input_option="USER_ENTERED")
+    except Exception as exc:
+        raise PortfolioStoreConnectionError(
+            "Google Sheets 庫存資料暫時無法寫入，請稍後重試或檢查試算表權限。"
+        ) from exc
 
 
 def _migrate_local_to_sheet(default_family_id: str) -> None:
@@ -376,7 +405,12 @@ def create_portfolio_item(
     if get_store_status().using_google_sheets:
         _migrate_local_to_sheet(family_id)
         worksheet = _get_worksheet()
-        worksheet.append_row(_sheet_row_values(item), value_input_option="USER_ENTERED")
+        try:
+            worksheet.append_row(_sheet_row_values(item), value_input_option="USER_ENTERED")
+        except Exception as exc:
+            raise PortfolioStoreConnectionError(
+                "Google Sheets 庫存資料暫時無法寫入，請稍後重試或檢查試算表權限。"
+            ) from exc
         return item
 
     items = _load_local_portfolio()
