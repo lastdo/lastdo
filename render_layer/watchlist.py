@@ -117,6 +117,8 @@ def _render_price_ma_chart(chart_df: pd.DataFrame, support_line: float | None = 
         chart_df["ma20"] = chart_df["close"].rolling(20, min_periods=1).mean()
     if "ma60" not in chart_df.columns:
         chart_df["ma60"] = chart_df["close"].rolling(60, min_periods=1).mean()
+    if "ma240" not in chart_df.columns and len(chart_df) >= 240:
+        chart_df["ma240"] = chart_df["close"].rolling(240, min_periods=240).mean()
     chart_df = chart_df.tail(120).reset_index(drop=True)
 
     fig = go.Figure()
@@ -147,6 +149,16 @@ def _render_price_ma_chart(chart_df: pd.DataFrame, support_line: float | None = 
             line=dict(color="#16a34a", width=2),
         )
     )
+    if "ma240" in chart_df.columns and chart_df["ma240"].notna().any():
+        fig.add_trace(
+            go.Scatter(
+                x=chart_df["date"],
+                y=chart_df["ma240"],
+                mode="lines",
+                name="MA240",
+                line=dict(color="#7c3aed", width=2, dash="dash"),
+            )
+        )
     if support_line is not None and pd.notna(support_line):
         fig.add_hline(y=float(support_line), line_dash="dot", line_color="#dc2626", annotation_text="支撐價")
 

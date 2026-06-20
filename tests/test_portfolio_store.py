@@ -87,6 +87,21 @@ class PortfolioStoreTests(unittest.TestCase):
         self.assertEqual([item["stock_id"] for item in home_items], ["2330"])
         self.assertEqual([item["stock_id"] for item in office_items], ["2317"])
 
+    def test_sheet_read_errors_are_wrapped_for_ui(self):
+        class BrokenWorksheet:
+            def get_all_records(self, expected_headers):
+                raise RuntimeError("raw google api failure")
+
+        original_get_worksheet = portfolio_store._get_worksheet
+        portfolio_store._get_worksheet = lambda: BrokenWorksheet()
+        try:
+            with self.assertRaises(portfolio_store.PortfolioStoreConnectionError) as raised:
+                portfolio_store._sheet_records()
+        finally:
+            portfolio_store._get_worksheet = original_get_worksheet
+
+        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
+
 
 if __name__ == "__main__":
     unittest.main()
