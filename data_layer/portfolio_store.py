@@ -34,6 +34,7 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
+SHEET_VALUE_INPUT_OPTION = "RAW"
 
 
 def _resolve_local_portfolio_source():
@@ -297,7 +298,20 @@ def _find_sheet_row(worksheet, row_id: str, family_id: str) -> tuple[int, dict[s
 
 def _update_sheet_row(worksheet, row_index: int, row: dict[str, Any]) -> None:
     try:
-        worksheet.update(values=[_sheet_row_values(row)], range_name=f"A{row_index}:J{row_index}")
+        worksheet.update(
+            values=[_sheet_row_values(row)],
+            range_name=f"A{row_index}:J{row_index}",
+            value_input_option=SHEET_VALUE_INPUT_OPTION,
+        )
+    except Exception as exc:
+        raise PortfolioStoreConnectionError(
+            "Google Sheets 庫存資料暫時無法寫入，請稍後重試或檢查試算表權限。"
+        ) from exc
+
+
+def _append_sheet_row(worksheet, row: dict[str, Any]) -> None:
+    try:
+        worksheet.append_row(_sheet_row_values(row), value_input_option=SHEET_VALUE_INPUT_OPTION)
     except Exception as exc:
         raise PortfolioStoreConnectionError(
             "Google Sheets 庫存資料暫時無法寫入，請稍後重試或檢查試算表權限。"
@@ -306,13 +320,8 @@ def _update_sheet_row(worksheet, row_index: int, row: dict[str, Any]) -> None:
 
 def _write_sheet_rows(rows: list[dict[str, Any]]) -> None:
     worksheet = _get_worksheet()
-    try:
-        for row in rows:
-            worksheet.append_row(_sheet_row_values(row), value_input_option="USER_ENTERED")
-    except Exception as exc:
-        raise PortfolioStoreConnectionError(
-            "Google Sheets 庫存資料暫時無法寫入，請稍後重試或檢查試算表權限。"
-        ) from exc
+    for row in rows:
+        _append_sheet_row(worksheet, row)
 
 
 def _migrate_local_to_sheet(default_family_id: str) -> None:
@@ -405,12 +414,7 @@ def create_portfolio_item(
     if get_store_status().using_google_sheets:
         _migrate_local_to_sheet(family_id)
         worksheet = _get_worksheet()
-        try:
-            worksheet.append_row(_sheet_row_values(item), value_input_option="USER_ENTERED")
-        except Exception as exc:
-            raise PortfolioStoreConnectionError(
-                "Google Sheets 庫存資料暫時無法寫入，請稍後重試或檢查試算表權限。"
-            ) from exc
+        _append_sheet_row(worksheet, item)
         return item
 
     items = _load_local_portfolio()
