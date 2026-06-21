@@ -87,6 +87,38 @@ class PortfolioStoreTests(unittest.TestCase):
         self.assertEqual([item["stock_id"] for item in home_items], ["2330"])
         self.assertEqual([item["stock_id"] for item in office_items], ["2317"])
 
+    def test_sheet_writes_use_raw_values_to_preserve_etf_codes(self):
+        class CapturingWorksheet:
+            def __init__(self):
+                self.append_calls = []
+                self.update_calls = []
+
+            def append_row(self, values, value_input_option):
+                self.append_calls.append((values, value_input_option))
+
+            def update(self, values, range_name, value_input_option):
+                self.update_calls.append((values, range_name, value_input_option))
+
+        worksheet = CapturingWorksheet()
+        row = portfolio_store.normalize_portfolio_item(
+            {
+                "row_id": "row-1",
+                "family_id": "home",
+                "stock_id": "006208",
+                "stock_name": "富邦台50",
+                "avg_cost": 100.5,
+                "shares": 1000,
+            }
+        )
+
+        portfolio_store._append_sheet_row(worksheet, row)
+        portfolio_store._update_sheet_row(worksheet, 2, row)
+
+        self.assertEqual(worksheet.append_calls[0][0][2], "006208")
+        self.assertEqual(worksheet.append_calls[0][1], "RAW")
+        self.assertEqual(worksheet.update_calls[0][0][0][2], "006208")
+        self.assertEqual(worksheet.update_calls[0][2], "RAW")
+
     def test_sheet_read_errors_are_wrapped_for_ui(self):
         class BrokenWorksheet:
             def get_all_records(self, expected_headers):
