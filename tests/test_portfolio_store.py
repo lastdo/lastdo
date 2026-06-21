@@ -119,9 +119,34 @@ class PortfolioStoreTests(unittest.TestCase):
         self.assertEqual(worksheet.update_calls[0][0][0][2], "006208")
         self.assertEqual(worksheet.update_calls[0][2], "RAW")
 
+    def test_sheet_records_disable_numericise_to_preserve_etf_codes(self):
+        class CapturingWorksheet:
+            def __init__(self):
+                self.calls = []
+
+            def get_all_records(self, expected_headers, numericise_ignore):
+                self.calls.append(
+                    {
+                        "expected_headers": expected_headers,
+                        "numericise_ignore": numericise_ignore,
+                    }
+                )
+                return [{"stock_id": "006208", "family_id": "home", "is_deleted": ""}]
+
+        worksheet = CapturingWorksheet()
+        original_get_worksheet = portfolio_store._get_worksheet
+        portfolio_store._get_worksheet = lambda: worksheet
+        try:
+            records = portfolio_store._sheet_records()
+        finally:
+            portfolio_store._get_worksheet = original_get_worksheet
+
+        self.assertEqual(records[0]["stock_id"], "006208")
+        self.assertEqual(worksheet.calls[0]["numericise_ignore"], ["all"])
+
     def test_sheet_read_errors_are_wrapped_for_ui(self):
         class BrokenWorksheet:
-            def get_all_records(self, expected_headers):
+            def get_all_records(self, expected_headers, numericise_ignore):
                 raise RuntimeError("raw google api failure")
 
         original_get_worksheet = portfolio_store._get_worksheet
