@@ -249,7 +249,7 @@ def _ensure_headers(worksheet) -> None:
 def _sheet_records() -> list[dict[str, Any]]:
     worksheet = _get_worksheet()
     try:
-        return worksheet.get_all_records(expected_headers=WORKSHEET_HEADERS)
+        return worksheet.get_all_records(expected_headers=WORKSHEET_HEADERS, numericise_ignore=["all"])
     except Exception as exc:
         raise PortfolioStoreConnectionError(
             "Google Sheets 庫存資料暫時無法讀取，請稍後重試或檢查試算表權限。"
