@@ -3,11 +3,19 @@ import re
 import time
 
 import requests
+import urllib3
 
 from data_layer.time_utils import taipei_today
 
 
-DEFAULT_HEADERS = {"User-Agent": "Mozilla/5.0"}
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json,text/plain,*/*",
+    "Connection": "close",
+}
 URL_TWSE_MI_INDEX = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={date}&type=ALLBUT0999"
 
 TWSE_MI_INDEX_FIELDS = {
@@ -33,13 +41,37 @@ def fetch_json_twse(url: str) -> list:
     raise last_err
 
 
-def fetch_json_tpex(url: str) -> list:
+def _get_tpex_json(url: str):
+    last_err = None
+    for verify_ssl in (True, False):
+        try:
+            resp = requests.get(
+                url,
+                timeout=90,
+                headers=DEFAULT_HEADERS,
+                stream=False,
+                verify=verify_ssl,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.SSLError as exc:
+            last_err = exc
+            if verify_ssl:
+                continue
+            raise
+        except Exception as exc:
+            last_err = exc
+            break
+    if last_err is not None:
+        raise last_err
+    return []
+
+
+def fetch_json_tpex(url: str):
     last_err = None
     for attempt in range(3):
         try:
-            resp = requests.get(url, timeout=90, headers=DEFAULT_HEADERS, stream=False)
-            resp.raise_for_status()
-            return resp.json()
+            return _get_tpex_json(url)
         except Exception as exc:
             last_err = exc
             time.sleep(2 * (attempt + 1))
