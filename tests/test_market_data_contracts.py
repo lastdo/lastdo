@@ -137,6 +137,8 @@ class MarketDataContractTests(unittest.TestCase):
                     result = mops_revenue._fetch_market_revenue_with_redirects(FakeFetcher(), 115, 5, "sii", 0)
 
         self.assertEqual(result["stock_id"].tolist(), ["2330"])
+        self.assertEqual(requested_urls[0], "https://mopsov.twse.com.tw/")
+        self.assertIn("https://mopsov.twse.com.tw/nas/t21/sii/", requested_urls)
         self.assertIn("https://mops.twse.com.tw/nas/t21/sii/t21sc03_115_5_0.html", requested_urls)
         self.assertIn("https://mopsov.twse.com.tw/nas/t21/sii/t21sc03_115_5_0.html", requested_urls)
 
