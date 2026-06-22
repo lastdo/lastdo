@@ -84,6 +84,62 @@ class MarketDataContractTests(unittest.TestCase):
         self.assertEqual(parsed.loc[0, "revenue_last_year"], "200000")
         self.assertEqual(parsed.loc[0, "yoy_change"], "50.0")
 
+    def test_fetch_market_revenue_retries_mopsov_when_package_uses_old_host(self):
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def get(self, url, headers=None):
+                requested_urls.append(url)
+                if "mopsov.twse.com.tw" not in url:
+                    return FakeResponse(404, url)
+                return FakeResponse(200, url)
+
+        class FakeFetcher:
+            client = type(
+                "FakeFetcherClient",
+                (),
+                {
+                    "timeout": 20,
+                    "_get_headers": staticmethod(lambda url: {}),
+                },
+            )()
+
+            def _get_revenue_url(self, year, month, market, company_type):
+                return "https://mops.twse.com.tw/nas/t21/sii/t21sc03_115_5_0.html"
+
+        class FakeResponse:
+            is_redirect = False
+            headers = {}
+            text = "<html></html>"
+            content = b"<html></html>"
+
+            def __init__(self, status_code, url):
+                self.status_code = status_code
+                self.url = url
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise RuntimeError(self.status_code)
+
+        requested_urls = []
+        parsed = pd.DataFrame({"stock_id": ["2330"]})
+
+        with patch("data_layer.mops_revenue.httpx.Client", FakeClient):
+            with patch("data_layer.mops_revenue.pd.read_html", return_value=[pd.DataFrame()]):
+                with patch("data_layer.mops_revenue._parse_mops_revenue_tables", return_value=parsed):
+                    result = mops_revenue._fetch_market_revenue_with_redirects(FakeFetcher(), 115, 5, "sii", 0)
+
+        self.assertEqual(result["stock_id"].tolist(), ["2330"])
+        self.assertIn("https://mops.twse.com.tw/nas/t21/sii/t21sc03_115_5_0.html", requested_urls)
+        self.assertIn("https://mopsov.twse.com.tw/nas/t21/sii/t21sc03_115_5_0.html", requested_urls)
+
     def test_fetch_mops_month_revenue_keeps_successful_sources(self):
         class FakeFetcher:
             def get_market_revenue(self, year, month, market, company_type):

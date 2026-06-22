@@ -51,7 +51,7 @@ HIDDEN_DRAGON_PE_MAX = 20.0
 HIDDEN_DRAGON_LOW_MAX_PREMIUM = 0.20
 PRICE_HISTORY_MONTHS = 12
 LOW_HISTORY_MONTHS = 6
-MOPS_REVENUE_CACHE_VERSION = "mops-revenue-diagnostics-v2"
+MOPS_REVENUE_CACHE_VERSION = "mops-revenue-diagnostics-v3"
 
 
 st.set_page_config(page_title="雙龍吐珠", page_icon="🐉", layout="wide")

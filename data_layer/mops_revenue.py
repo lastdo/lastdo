@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from io import StringIO
 from typing import Iterable
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import httpx
 import pandas as pd
@@ -14,6 +15,7 @@ from data_layer.time_utils import taipei_today
 MOPS_MARKETS = ("sii", "otc")
 MOPS_COMPANY_TYPES = (0, 1)
 MOPS_REVENUE_COLUMNS = ["stock_id", "rev_ym", "rev_yoy", "rev_cur", "rev_ly"]
+MOPS_REVENUE_HOST = "mopsov.twse.com.tw"
 
 MOPS_FIELD_ALIASES = {
     "stock_id": (("\u516c\u53f8", "\u4ee3\u865f"),),
@@ -154,6 +156,22 @@ def _normalize_revenue_frame(raw: object, market: str, company_type: int, ym: st
     return normalized
 
 
+def _candidate_revenue_urls(url: str) -> list[str]:
+    parsed = urlparse(str(url))
+    urls = [str(url)]
+    if parsed.netloc and parsed.netloc != MOPS_REVENUE_HOST:
+        urls.append(urlunparse(parsed._replace(scheme="https", netloc=MOPS_REVENUE_HOST)))
+    return list(dict.fromkeys(urls))
+
+
+def _mops_request_headers(fetcher: RevenueFetcher, url: str) -> dict[str, str]:
+    headers = dict(fetcher.client._get_headers(url))
+    headers.setdefault("User-Agent", "Mozilla/5.0")
+    headers.setdefault("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+    headers.setdefault("Accept-Language", "zh-TW,zh;q=0.9,en-US;q=0.7,en;q=0.6")
+    return headers
+
+
 def _fetch_market_revenue_with_redirects(
     fetcher: RevenueFetcher,
     roc_year: int,
@@ -161,31 +179,40 @@ def _fetch_market_revenue_with_redirects(
     market: str,
     company_type: int,
 ) -> object:
-    url = fetcher._get_revenue_url(roc_year, month, market, company_type)
-    headers = fetcher.client._get_headers(url)
     timeout = getattr(fetcher.client, "timeout", 20)
+    errors: list[str] = []
 
-    for verify_ssl in (True, False):
-        try:
-            with httpx.Client(
-                timeout=timeout,
-                follow_redirects=True,
-                verify=verify_ssl,
-            ) as client:
-                response = client.get(url, headers=headers)
-            break
-        except httpx.ConnectError:
-            if not verify_ssl:
-                raise
-    else:
-        return []
+    for url in _candidate_revenue_urls(fetcher._get_revenue_url(roc_year, month, market, company_type)):
+        headers = _mops_request_headers(fetcher, url)
+        for verify_ssl in (True, False):
+            try:
+                with httpx.Client(
+                    timeout=timeout,
+                    follow_redirects=True,
+                    verify=verify_ssl,
+                    max_redirects=8,
+                ) as client:
+                    response = client.get(url, headers=headers)
+                    if response.is_redirect and response.headers.get("location"):
+                        redirect_url = urljoin(str(response.url), response.headers["location"])
+                        response = client.get(redirect_url, headers=_mops_request_headers(fetcher, redirect_url))
+                if response.status_code == 404:
+                    errors.append(f"{url} returned 404")
+                    break
+                response.raise_for_status()
+                response.encoding = "big5"
+                dfs = pd.read_html(StringIO(response.text))
+                return _parse_mops_revenue_tables(dfs)
+            except httpx.ConnectError:
+                if not verify_ssl:
+                    errors.append(f"{url} connect failed")
+            except httpx.HTTPStatusError as exc:
+                errors.append(f"{url} HTTP {exc.response.status_code}")
+                break
 
-    if response.status_code == 404:
-        return []
-    response.raise_for_status()
-    response.encoding = "big5"
-    dfs = pd.read_html(StringIO(response.text))
-    return _parse_mops_revenue_tables(dfs)
+    if errors:
+        raise RuntimeError("; ".join(errors))
+    return []
 
 
 def fetch_mops_month_revenue_frame(
