@@ -193,14 +193,26 @@ def _mops_request_headers(fetcher: RevenueFetcher, url: str, referer: str | None
     return headers
 
 
-def _warm_mops_browser_session(client: httpx.Client, fetcher: RevenueFetcher) -> None:
-    try:
-        client.get(
-            f"{MOPS_REVENUE_BASE}/",
-            headers=_mops_request_headers(fetcher, MOPS_REVENUE_BASE),
-        )
-    except httpx.HTTPError:
-        return
+def _mops_warmup_urls(target_url: str) -> list[str]:
+    parsed = urlparse(str(target_url))
+    urls = [f"{MOPS_REVENUE_BASE}/"]
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if len(path_parts) >= 3 and path_parts[:2] == ["nas", "t21"]:
+        urls.append(f"{MOPS_REVENUE_BASE}/nas/t21/{path_parts[2]}/")
+    return list(dict.fromkeys(urls))
+
+
+def _warm_mops_browser_session(session: httpx.Client, fetcher: RevenueFetcher, target_url: str) -> None:
+    referer = None
+    for warmup_url in _mops_warmup_urls(target_url):
+        try:
+            session.get(
+                warmup_url,
+                headers=_mops_request_headers(fetcher, warmup_url, referer=referer),
+            )
+        except httpx.HTTPError:
+            pass
+        referer = warmup_url
 
 
 def _fetch_market_revenue_with_redirects(
@@ -222,12 +234,12 @@ def _fetch_market_revenue_with_redirects(
                     follow_redirects=True,
                     verify=verify_ssl,
                     max_redirects=8,
-                ) as client:
-                    _warm_mops_browser_session(client, fetcher)
-                    response = client.get(url, headers=headers)
+                ) as session:
+                    _warm_mops_browser_session(session, fetcher, url)
+                    response = session.get(url, headers=headers)
                     if response.is_redirect and response.headers.get("location"):
                         redirect_url = urljoin(str(response.url), response.headers["location"])
-                        response = client.get(
+                        response = session.get(
                             redirect_url,
                             headers=_mops_request_headers(fetcher, redirect_url, referer=url),
                         )
