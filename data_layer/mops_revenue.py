@@ -16,6 +16,28 @@ MOPS_MARKETS = ("sii", "otc")
 MOPS_COMPANY_TYPES = (0, 1)
 MOPS_REVENUE_COLUMNS = ["stock_id", "rev_ym", "rev_yoy", "rev_cur", "rev_ly"]
 MOPS_REVENUE_HOST = "mopsov.twse.com.tw"
+MOPS_REVENUE_BASE = f"https://{MOPS_REVENUE_HOST}"
+MOPS_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate",
+    "Cache-Control": "max-age=0",
+    "Connection": "keep-alive",
+    "DNT": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+}
 
 MOPS_FIELD_ALIASES = {
     "stock_id": (("\u516c\u53f8", "\u4ee3\u865f"),),
@@ -164,12 +186,21 @@ def _candidate_revenue_urls(url: str) -> list[str]:
     return list(dict.fromkeys(urls))
 
 
-def _mops_request_headers(fetcher: RevenueFetcher, url: str) -> dict[str, str]:
-    headers = dict(fetcher.client._get_headers(url))
-    headers.setdefault("User-Agent", "Mozilla/5.0")
-    headers.setdefault("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-    headers.setdefault("Accept-Language", "zh-TW,zh;q=0.9,en-US;q=0.7,en;q=0.6")
+def _mops_request_headers(fetcher: RevenueFetcher, url: str, referer: str | None = None) -> dict[str, str]:
+    headers = dict(fetcher.client._get_headers(referer or MOPS_REVENUE_BASE))
+    headers.update(MOPS_BROWSER_HEADERS)
+    headers["Referer"] = referer or f"{MOPS_REVENUE_BASE}/"
     return headers
+
+
+def _warm_mops_browser_session(client: httpx.Client, fetcher: RevenueFetcher) -> None:
+    try:
+        client.get(
+            f"{MOPS_REVENUE_BASE}/",
+            headers=_mops_request_headers(fetcher, MOPS_REVENUE_BASE),
+        )
+    except httpx.HTTPError:
+        return
 
 
 def _fetch_market_revenue_with_redirects(
@@ -192,10 +223,14 @@ def _fetch_market_revenue_with_redirects(
                     verify=verify_ssl,
                     max_redirects=8,
                 ) as client:
+                    _warm_mops_browser_session(client, fetcher)
                     response = client.get(url, headers=headers)
                     if response.is_redirect and response.headers.get("location"):
                         redirect_url = urljoin(str(response.url), response.headers["location"])
-                        response = client.get(redirect_url, headers=_mops_request_headers(fetcher, redirect_url))
+                        response = client.get(
+                            redirect_url,
+                            headers=_mops_request_headers(fetcher, redirect_url, referer=url),
+                        )
                 if response.status_code == 404:
                     errors.append(f"{url} returned 404")
                     break
