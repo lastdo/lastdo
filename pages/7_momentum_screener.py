@@ -19,13 +19,19 @@ from data_layer.data_diagnostics import (
 from data_layer.export_utils import dataframe_to_csv_bytes
 from data_layer.historical_price_service import clean_price_history, fetch_cached_finmind_price_history
 from data_layer.market_api import (
-    fetch_json_tpex as fetch_json_tpex_base,
     fetch_latest_twse_price_rows,
 )
 from data_layer.market_data import build_latest_revenue_view, build_price_snapshot
-from data_layer.mops_revenue import fetch_mops_recent_revenue_frame, latest_revenue_ym
+from data_layer.mops_revenue import latest_revenue_ym
 from data_layer.portfolio_store import get_default_family_id
 from data_layer.public_valuation import attach_public_valuation, fetch_public_pe_ratios_with_diagnostics
+from data_layer.screener_data import (
+    URL_TPEX_PRICE,
+    fetch_screener_mops_revenue as fetch_mops_recent_revenue,
+    fetch_screener_price_history as get_finmind_price_history,
+    fetch_tpex_price_rows as fetch_json_tpex,
+    parse_finmind_limit,
+)
 from data_layer.time_utils import taipei_now, taipei_today
 from render_layer.diagnostics import render_data_diagnostics
 from render_layer.style import apply_style, page_header, render_global_navigation, render_meta_strip
@@ -38,7 +44,6 @@ from render_layer.watchlist import (
 load_dotenv()
 
 
-URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 PRICE_MIN = 20.0
 PRICE_MAX = 50.0
 REV_YOY_MIN = 30.0
@@ -57,38 +62,6 @@ page_header(
     "小型飆股起漲策略",
     "用低中價位、單月營收高成長與年線乖離控制，尋找剛要發動的小型股候選名單。",
 )
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_json_tpex(url: str) -> list:
-    return fetch_json_tpex_base(url)
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_mops_recent_revenue(latest_ym: str, months: int) -> pd.DataFrame:
-    return fetch_mops_recent_revenue_frame(latest_ym, months=months)
-
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token: str = "") -> pd.DataFrame:
-    df, status_code, msg, retry_after = fetch_cached_finmind_price_history(
-        symbol,
-        start_date,
-        end_date,
-        token=token,
-        timeout=30,
-        sleep_seconds=1.2,
-        raise_on_rate_limit=False,
-    )
-    if status_code in (402, 403, 429):
-        raise RuntimeError(f"FINMIND_LIMIT:{status_code}:{retry_after}:{msg}")
-    if status_code != 200 or df.empty:
-        return pd.DataFrame()
-
-    df = clean_price_history(df, required_columns=("date", "close"))
-    if df.empty:
-        return pd.DataFrame()
-    return df[["date", "open", "high", "low", "close", "volume"]]
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -115,20 +88,6 @@ def get_momentum_watchlist_chart_data(symbol: str, token: str = "") -> pd.DataFr
         return df.tail(180).reset_index(drop=True)
     except Exception:
         return pd.DataFrame()
-
-
-def parse_finmind_limit(error_msg: str) -> tuple[int | None, object | None]:
-    parts = str(error_msg).split(":", 3)
-    status = None
-    retry_after = None
-    if len(parts) >= 2:
-        try:
-            status = int(float(parts[1]))
-        except Exception:
-            status = None
-    if len(parts) >= 3:
-        retry_after = parts[2]
-    return status, retry_after
 
 
 def calc_ma240_row(row: pd.Series, history_df: pd.DataFrame) -> dict | None:
