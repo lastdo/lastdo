@@ -1,4 +1,3 @@
-import re
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import timedelta
 
@@ -14,22 +13,34 @@ from data_layer.data_diagnostics import (
 )
 from data_layer.historical_price_service import clean_price_history, fetch_cached_finmind_price_history
 from data_layer.market_data import build_latest_revenue_view, build_price_snapshot
-from data_layer.mops_revenue import fetch_mops_recent_revenue_frame, latest_revenue_ym
+from data_layer.mops_revenue import latest_revenue_ym
 from data_layer.market_api import (
-    fetch_json_tpex as fetch_json_tpex_base,
     fetch_latest_twse_price_rows,
 )
 from data_layer.app_common import get_runtime_secret
 from data_layer.time_utils import taipei_now, taipei_today
 from data_layer.portfolio_store import get_default_family_id
 from data_layer.public_valuation import attach_public_valuation, fetch_public_pe_ratios_with_diagnostics
+from data_layer.screener_data import (
+    URL_TPEX_PRICE,
+    fetch_screener_mops_revenue as fetch_mops_recent_revenue,
+    fetch_tpex_price_rows as fetch_json_tpex,
+    format_retry_at,
+    format_wait_time,
+    parse_finmind_retry_seconds,
+)
 from render_layer.diagnostics import render_data_diagnostics
 from render_layer.watchlist import format_watchlist_number, render_watchlist_adder as render_watchlist_adder_base
+from render_layer.screener_common import (
+    INVESTMENT_DISCLAIMER,
+    render_alert_summary as render_screener_alert_summary,
+    render_page_positioning as render_screener_page_positioning,
+    render_result_view_selector,
+    render_strategy_card as render_screener_strategy_card,
+    validate_family_id,
+)
 
 load_dotenv()
-
-RESULT_VIEW_OPTIONS = ["標記說明", "明細表", "診斷與資料"]
-FAMILY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def build_alert_flags(result_df: pd.DataFrame, rev_growth_floor: float, rebound_ceiling: float) -> pd.DataFrame:
@@ -68,17 +79,7 @@ def build_alert_flags(result_df: pd.DataFrame, rev_growth_floor: float, rebound_
 
 
 def render_alert_summary(display_df: pd.DataFrame) -> None:
-    alert_col = "警示標記" if "警示標記" in display_df.columns else "霅衣內璅?"
-    if display_df.empty or alert_col not in display_df.columns:
-        return
-
-    flattened = "｜".join(display_df[alert_col].astype(str).tolist())
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("貼近支撐", flattened.count("貼近支撐"))
-    col2.metric("起漲初段", flattened.count("起漲初段"))
-    col3.metric("空間縮小", flattened.count("空間縮小"))
-    col4.metric("營收轉弱", flattened.count("營收轉弱"))
-    col5.metric("反彈無量", flattened.count("反彈無量"))
+    render_screener_alert_summary(display_df, ["貼近支撐", "起漲初段", "空間縮小", "營收轉弱", "反彈無量"])
 
 
 def render_bottom_tag_explainer(
@@ -112,7 +113,6 @@ def render_bottom_tag_explainer(
 # ─────────────────────────────────────────────
 # API 端點
 # ─────────────────────────────────────────────
-URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 from data_layer.export_utils import dataframe_to_csv_bytes
 
 # ─────────────────────────────────────────────
@@ -127,47 +127,32 @@ page_header("📈", "底部剛起漲選股器", "策略：近半年低點支撐 
 
 
 def render_page_positioning() -> None:
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown(
-            """
-            **這頁看什麼**
-
-            找出近半年有明確支撐、股價剛離底不遠，且最新營收年增仍為正的股票。
-            """
-        )
-    with col2:
-        st.markdown(
-            """
-            **適合什麼情境**
-
-            適合想先找「底部整理後開始轉強」標的，再進一步做人手複核的情境。
-            """
-        )
-    with col3:
-        st.markdown(
-            """
-            **篩選風格**
-
-            邏輯屬於 **中性偏積極**，先過濾流動性與營收，再從底部型態中找起漲股。
-            """
-        )
+    render_screener_page_positioning(
+        [
+            {"title": "這頁看什麼", "body": "找出近半年有明確支撐、股價剛離底不遠，且最新營收年增仍為正的股票。"},
+            {"title": "適合什麼情境", "body": "適合想先找「底部整理後開始轉強」標的，再進一步做人手複核的情境。"},
+            {"title": "篩選風格", "body": "邏輯屬於 **中性偏積極**，先過濾流動性與營收，再從底部型態中找起漲股。"},
+        ]
+    )
 
 
 render_page_positioning()
 
 
 def render_strategy_card() -> None:
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("策略核心", "貼底轉強")
-    col2.metric("支撐區間", "近半年低點")
-    col3.metric("資料主體", "官方 + FinMind")
-    col4.metric("判讀重點", "空間與量能")
-    st.caption("先確認股價仍貼近支撐，再看營收是否維持正向，最後檢查反彈是否有量能配合。")
+    render_screener_strategy_card(
+        [
+            ("策略核心", "貼底轉強"),
+            ("支撐區間", "近半年低點"),
+            ("資料主體", "官方 + FinMind"),
+            ("判讀重點", "空間與量能"),
+        ],
+        "先確認股價仍貼近支撐，再看營收是否維持正向，最後檢查反彈是否有量能配合。",
+        "本頁優先處理底部型態、營收動能與短線技術位階，不直接等於買進訊號。",
+    )
 
 
 render_strategy_card()
-st.caption("本頁優先處理底部型態、營收動能與短線技術位階，不直接等於買進訊號。")
 
 # ─────────────────────────────────────────────
 # 側邊欄
@@ -227,39 +212,7 @@ with st.sidebar:
     st.caption("📡 股價：TWSE + TPEX OpenAPI（免費）；月營收：MOPS")
     st.caption("📡 近半年歷史股價：FinMind TaiwanStockPrice（三線程查詢）")
     st.caption("📡 本益比：官方上市櫃 API")
-    st.caption("📢 本系統僅供學術研究，不構成投資建議")
-
-
-def parse_finmind_retry_seconds(error_msg: str):
-    parts = str(error_msg).split(":", 3)
-    numeric_parts = []
-    for part in parts[1:]:
-        try:
-            numeric_parts.append(max(int(float(part)), 0))
-        except Exception:
-            continue
-    if not numeric_parts:
-        return None
-    return numeric_parts[1] if len(numeric_parts) >= 2 else numeric_parts[0]
-
-
-def format_wait_time(seconds):
-    if seconds is None:
-        return "未知"
-    minutes, sec = divmod(int(seconds), 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours > 0:
-        return f"{hours} 小時 {minutes} 分 {sec} 秒"
-    if minutes > 0:
-        return f"{minutes} 分 {sec} 秒"
-    return f"{sec} 秒"
-
-
-def format_retry_at(seconds):
-    if seconds is None:
-        return "未知"
-    retry_at = taipei_now() + timedelta(seconds=int(seconds))
-    return retry_at.strftime("%H:%M:%S")
+    st.caption(INVESTMENT_DISCLAIMER)
 
 
 # ─────────────────────────────────────────────
@@ -333,20 +286,6 @@ def render_bottom_table(display_df: pd.DataFrame) -> None:
     )
 
 
-def render_result_view_selector(key: str, default: str = "標記說明") -> str:
-    current = st.session_state.get(key, default)
-    if current not in RESULT_VIEW_OPTIONS:
-        current = default
-    return st.radio(
-        "結果檢視",
-        RESULT_VIEW_OPTIONS,
-        index=RESULT_VIEW_OPTIONS.index(current),
-        key=key,
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-
-
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_bottom_watchlist_chart_data(symbol: str, token: str = "") -> pd.DataFrame:
     today = taipei_today()
@@ -409,9 +348,7 @@ def render_watchlist_adder(result_df: pd.DataFrame, family_id: str, finmind_toke
 
 
 family_id = st.session_state.get("inventory_family_id", get_default_family_id()).strip()
-if not FAMILY_ID_PATTERN.fullmatch(family_id):
-    st.error("family_id 格式錯誤，僅能使用英文字母、數字、底線(_)或連字號(-)，長度 1-64。")
-    st.stop()
+validate_family_id(family_id, "family_id 格式錯誤，僅能使用英文字母、數字、底線(_)或連字號(-)，長度 1-64。")
 
 
 if not run_btn:
@@ -460,16 +397,6 @@ if not run_btn:
 # ─────────────────────────────────────────────
 # 共用函式
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_json_tpex(url: str) -> list:
-    return fetch_json_tpex_base(url)
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_mops_recent_revenue(latest_ym: str, months: int) -> pd.DataFrame:
-    return fetch_mops_recent_revenue_frame(latest_ym, months=months)
-
-
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token: str = "") -> pd.DataFrame:
     df, status_code, msg, retry_after = fetch_cached_finmind_price_history(

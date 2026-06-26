@@ -17,13 +17,21 @@ from data_layer.data_diagnostics import (
 from data_layer.export_utils import dataframe_to_csv_bytes
 from data_layer.historical_price_service import clean_price_history, fetch_cached_finmind_price_history
 from data_layer.market_api import (
-    fetch_json_tpex as fetch_json_tpex_base,
     fetch_latest_twse_price_rows,
 )
 from data_layer.market_data import build_price_snapshot
-from data_layer.mops_revenue import fetch_mops_recent_revenue_frame, latest_revenue_ym
+from data_layer.mops_revenue import latest_revenue_ym
 from data_layer.portfolio_store import get_default_family_id
 from data_layer.public_valuation import attach_public_valuation, fetch_public_pe_ratios_with_diagnostics
+from data_layer.screener_data import (
+    URL_TPEX_PRICE,
+    fetch_screener_mops_revenue as fetch_mops_recent_revenue,
+    fetch_screener_price_history as get_finmind_price_history,
+    fetch_tpex_price_rows as fetch_json_tpex,
+    format_wait_time,
+    parse_finmind_limit_status,
+    parse_finmind_retry_seconds,
+)
 from data_layer.time_utils import taipei_now, taipei_today
 from render_layer.diagnostics import render_data_diagnostics
 from render_layer.style import apply_style, page_header, render_global_navigation, render_meta_strip
@@ -36,7 +44,6 @@ from render_layer.watchlist import (
 load_dotenv()
 
 
-URL_TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
 FAMILY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 PRICE_MIN = 60.0
@@ -61,37 +68,6 @@ page_header(
     "雙龍吐珠",
     "龍騰升空看季線突破，潛龍在淵看六個月低點附近的基本面轉強。",
 )
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_json_tpex(url: str) -> list:
-    return fetch_json_tpex_base(url)
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_mops_recent_revenue(latest_ym: str, months: int, cache_version: str) -> pd.DataFrame:
-    _ = cache_version
-    return fetch_mops_recent_revenue_frame(latest_ym, months=months)
-
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token: str = "") -> pd.DataFrame:
-    df, status_code, msg, retry_after = fetch_cached_finmind_price_history(
-        symbol,
-        start_date,
-        end_date,
-        token=token,
-        timeout=30,
-        sleep_seconds=1.2,
-        raise_on_rate_limit=False,
-    )
-    if status_code in (402, 403, 429):
-        raise RuntimeError(f"FINMIND_LIMIT:{status_code}:{retry_after}:{msg}")
-    if status_code != 200 or df.empty:
-        return pd.DataFrame()
-
-    df = clean_price_history(df, required_columns=("date", "low", "close"))
-    return df[["date", "open", "high", "low", "close", "volume"]]
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -207,38 +183,6 @@ def calc_history_row(row: pd.Series, history_df: pd.DataFrame) -> dict | None:
         "low_premium_pct": (latest_close / six_month_low - 1) * 100 if six_month_low > 0 else pd.NA,
         "history_days": len(history_df),
     }
-
-
-def parse_finmind_retry_seconds(error_msg: str):
-    parts = str(error_msg).split(":", 3)
-    if len(parts) < 3:
-        return None
-    try:
-        return max(int(float(parts[2])), 0)
-    except Exception:
-        return None
-
-
-def parse_finmind_limit_status(error_msg: str):
-    parts = str(error_msg).split(":", 3)
-    if len(parts) < 2:
-        return None
-    try:
-        return int(float(parts[1]))
-    except Exception:
-        return None
-
-
-def format_wait_time(seconds):
-    if seconds is None:
-        return "未知"
-    minutes, sec = divmod(int(seconds), 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours > 0:
-        return f"{hours} 小時 {minutes} 分 {sec} 秒"
-    if minutes > 0:
-        return f"{minutes} 分 {sec} 秒"
-    return f"{sec} 秒"
 
 
 def make_strategy_frames(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:

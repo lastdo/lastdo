@@ -1,5 +1,3 @@
-import re
-import requests
 import streamlit as st
 import pandas as pd
 from datetime import timedelta
@@ -20,11 +18,16 @@ from data_layer.portfolio_store import get_default_family_id
 from data_layer.public_valuation import attach_public_valuation, fetch_public_pe_ratios
 from data_layer.app_common import get_runtime_secret
 from render_layer.watchlist import format_watchlist_number, render_watchlist_adder as render_watchlist_adder_base
+from render_layer.screener_common import (
+    INVESTMENT_DISCLAIMER,
+    render_alert_summary as render_screener_alert_summary,
+    render_page_positioning as render_screener_page_positioning,
+    render_result_view_selector,
+    render_strategy_card as render_screener_strategy_card,
+    validate_family_id,
+)
 
 load_dotenv()
-
-RESULT_VIEW_OPTIONS = ["標記說明", "明細表", "診斷與資料"]
-FAMILY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 # ─────────────────────────────────────────────
 # API 端點
@@ -43,47 +46,32 @@ page_header("🏦", "外資籌碼重壓選股器", "策略：外資籌碼重壓 
 
 
 def render_page_positioning() -> None:
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown(
-            """
-            **這頁看什麼**
-
-            觀察外資近 N 日是否持續集中買超，並篩出籌碼明顯往單一方向堆疊的股票。
-            """
-        )
-    with col2:
-        st.markdown(
-            """
-            **適合什麼情境**
-
-            適合用來找主力型買盤正在發生、且想先判斷籌碼是否延續或鈍化的情境。
-            """
-        )
-    with col3:
-        st.markdown(
-            """
-            **篩選風格**
-
-            邏輯屬於 **中性偏積極**，重視外資動能與市場承接，不是單純低估值撿便宜。
-            """
-        )
+    render_screener_page_positioning(
+        [
+            {"title": "這頁看什麼", "body": "觀察外資近 N 日是否持續集中買超，並篩出籌碼明顯往單一方向堆疊的股票。"},
+            {"title": "適合什麼情境", "body": "適合用來找主力型買盤正在發生、且想先判斷籌碼是否延續或鈍化的情境。"},
+            {"title": "篩選風格", "body": "邏輯屬於 **中性偏積極**，重視外資動能與市場承接，不是單純低估值撿便宜。"},
+        ]
+    )
 
 
 render_page_positioning()
 
 
 def render_strategy_card() -> None:
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("策略核心", "外資集中")
-    col2.metric("觀察區間", "近 N 日")
-    col3.metric("資料主體", "官方 API")
-    col4.metric("判讀重點", "連買與背離")
-    st.caption("先確認外資是否持續買超，再觀察買盤有沒有加速、鈍化，或出現價量背離。")
+    render_screener_strategy_card(
+        [
+            ("策略核心", "外資集中"),
+            ("觀察區間", "近 N 日"),
+            ("資料主體", "官方 API"),
+            ("判讀重點", "連買與背離"),
+        ],
+        "先確認外資是否持續買超，再觀察買盤有沒有加速、鈍化，或出現價量背離。",
+        "本頁重點是看外資籌碼有沒有持續集中、加速或背離，不等同底部型策略。",
+    )
 
 
 render_strategy_card()
-st.caption("本頁重點是看外資籌碼有沒有持續集中、加速或背離，不等同底部型策略。")
 
 # ─────────────────────────────────────────────
 # 側邊欄
@@ -138,7 +126,7 @@ with st.sidebar:
     st.markdown("**資料來源**")
     st.caption("📡 股價：TWSE + TPEX OpenAPI（免費）")
     st.caption("📡 外資買賣超：TWSE + TPEX（免費）｜ 本益比：官方上市櫃 API")
-    st.caption("📢 本系統僅供學術研究，不構成投資建議")
+    st.caption(INVESTMENT_DISCLAIMER)
 
 
 def build_chip_alert_flags(result_df: pd.DataFrame) -> pd.DataFrame:
@@ -228,16 +216,7 @@ def make_chip_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def render_chip_alert_summary(display_df: pd.DataFrame) -> None:
-    if display_df.empty or "警示標記" not in display_df.columns:
-        return
-
-    flattened = "｜".join(display_df["警示標記"].astype(str).tolist())
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("外資連買", flattened.count("外資連買"))
-    col2.metric("籌碼加速", flattened.count("籌碼加速"))
-    col3.metric("價量配合", flattened.count("價量配合"))
-    col4.metric("買盤鈍化", flattened.count("買盤鈍化"))
-    col5.metric("籌碼背離", flattened.count("籌碼背離"))
+    render_screener_alert_summary(display_df, ["外資連買", "籌碼加速", "價量配合", "買盤鈍化", "籌碼背離"])
 
 
 def render_chip_tag_explainer(days_n: int, foreign_buy_min: float, pe_max: float, price_min: float, vol_min: int) -> None:
@@ -293,20 +272,6 @@ def render_chip_table(display_df: pd.DataFrame) -> None:
             streak_col: st.column_config.NumberColumn(streak_col, width=78, format="%d"),
             volume_col: st.column_config.NumberColumn(volume_col, width=116, format="%d"),
         },
-    )
-
-
-def render_result_view_selector(key: str, default: str = "標記說明") -> str:
-    current = st.session_state.get(key, default)
-    if current not in RESULT_VIEW_OPTIONS:
-        current = default
-    return st.radio(
-        "結果檢視",
-        RESULT_VIEW_OPTIONS,
-        index=RESULT_VIEW_OPTIONS.index(current),
-        key=key,
-        horizontal=True,
-        label_visibility="collapsed",
     )
 
 
@@ -370,9 +335,7 @@ def render_watchlist_adder(result_df: pd.DataFrame, family_id: str, finmind_toke
 
 
 family_id = st.session_state.get("inventory_family_id", get_default_family_id()).strip()
-if not FAMILY_ID_PATTERN.fullmatch(family_id):
-    st.error("family_id 格式錯誤，僅能使用英文字母、數字、底線(_)或連字號(-)，長度 1-64。")
-    st.stop()
+validate_family_id(family_id, "family_id 格式錯誤，僅能使用英文字母、數字、底線(_)或連字號(-)，長度 1-64。")
 
 
 def current_chip_screener_params() -> dict:
@@ -455,32 +418,6 @@ def fetch_twse_3insti(date_ymd: str) -> pd.DataFrame:
     回傳欄位：stock_id, foreign_net_shares（外資合計買賣超股數）
     """
     return fetch_twse_3insti_shared(date_ymd)
-    url = (f"https://www.twse.com.tw/fund/T86"
-           f"?response=json&date={date_ymd}&selectType=ALLBUT0999")
-    try:
-        resp = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-        result = resp.json()
-        if result.get("stat") != "OK" or not result.get("data"):
-            return pd.DataFrame()
-        fields = result["fields"]
-        df = pd.DataFrame(result["data"], columns=fields)
-        # 用模糊比對找欄位，避免繁簡字差異（陸/陆）造成 KeyError
-        col_f = next(
-            (c for c in df.columns if "不含外資自營商" in c and "買賣超" in c),
-            None,
-        )
-        col_fd = next((c for c in df.columns if "外資自營商買賣超" in c), None)
-        if col_f is None:
-            st.warning(f"⚠️ TWSE T86 找不到外資欄位，實際欄位：{list(df.columns)}")
-            return pd.DataFrame()
-        return build_institutional_net_buy_frame(
-            stock_ids=df["證券代號"],
-            primary_net_shares=df[col_f].astype(str).str.replace(",", ""),
-            secondary_net_shares=df[col_fd].astype(str).str.replace(",", "") if col_fd else None,
-        )
-    except Exception as e:
-        st.warning(f"⚠️ TWSE 三大法人 API 例外：{e}")
-        return pd.DataFrame()
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -488,56 +425,7 @@ def fetch_tpex_3insti(date_roc: str) -> pd.DataFrame:
     """查詢 TPEX 三大法人個股買賣超（date_roc: YYY/MM/DD 民國年）
     優先使用 OpenAPI，回傳欄位：stock_id, foreign_net_shares
     """
-    # TPEX OpenAPI（較穩定）
     return fetch_tpex_3insti_shared(date_roc)
-    url_open = ("https://www.tpex.org.tw/openapi/v1/"
-                "tpex_mainboard_3insti_quotes")
-    try:
-        resp = requests.get(url_open, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-        resp.raise_for_status()
-        data = resp.json()
-        if not data:
-            raise ValueError("empty")
-        df = pd.DataFrame(data)
-        # 欄位：SecuritiesCompanyCode, ForeignInvestmentNetBuyShares, DealerHedgingNetBuyShares
-        col_id  = next((c for c in df.columns if "Code" in c or "代號" in c or "代碼" in c), None)
-        col_f   = next((c for c in df.columns if "ForeignInvestment" in c and "Net" in c and "Shares" in c), None)
-        col_fd  = next((c for c in df.columns if "DealerHedging" in c and "Net" in c and "Shares" in c), None)
-        if col_id is None or col_f is None:
-            raise ValueError(f"欄位不符：{list(df.columns)}")
-        return build_institutional_net_buy_frame(
-            stock_ids=df[col_id],
-            primary_net_shares=df[col_f].astype(str).str.replace(",", ""),
-            secondary_net_shares=df[col_fd].astype(str).str.replace(",", "") if col_fd else None,
-        )
-    except Exception:
-        pass  # fallback 到舊版 web API
-
-    url_old = ("https://www.tpex.org.tw/web/stock/3insti/daily_trade/"
-               f"3itrade_hedge_result.php?l=zh-tw&se=EW&t=D&d={date_roc}&s=0,asc&o=json")
-    try:
-        resp = requests.get(url_old, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-        j = resp.json()
-        tables = j.get("tables", [])
-        if not tables or not tables[0].get("data"):
-            return pd.DataFrame()
-        header = tables[0].get("fields", []) or tables[0].get("title", [])
-        df = pd.DataFrame(tables[0]["data"])
-        # 找外資相關欄（不含自營商）和外資自營商欄
-        col_f  = next((i for i, h in enumerate(header) if "不含外資自營商" in str(h) and "買賣超" in str(h)), None)
-        col_fd = next((i for i, h in enumerate(header) if "外資自營商" in str(h) and "不含" not in str(h)), None)
-        if col_f is None:
-            col_f = 4  # 預設欄位 index fallback
-        if col_fd is None and df.shape[1] > 7:
-            col_fd = 7
-        return build_institutional_net_buy_frame(
-            stock_ids=df[0],
-            primary_net_shares=df[col_f].astype(str).str.replace(",", ""),
-            secondary_net_shares=df[col_fd].astype(str).str.replace(",", "") if col_fd is not None else None,
-        )
-    except Exception as e:
-        st.warning(f"⚠️ TPEX 三大法人 API 例外：{e}")
-        return pd.DataFrame()
 
 # ─────────────────────────────────────────────
 # Step 1：抓取股價（免費 API）
