@@ -54,7 +54,7 @@ def load_revenue_candidates(
     thresholds: DoubleDragonThresholds = DEFAULT_THRESHOLDS,
 ) -> tuple[pd.DataFrame, str, int]:
     latest_ym = latest_complete_revenue_ym(as_of_date)
-    df_revenue = fetch_mops_recent_revenue_frame(latest_ym, months=4)
+    df_revenue = fetch_mops_recent_revenue_frame(latest_ym, months=2)
     df_metrics = build_revenue_metrics_skip_february(df_revenue, months=2)
     if df_metrics.empty:
         return df_metrics, latest_ym, len(df_revenue)

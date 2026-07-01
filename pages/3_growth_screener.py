@@ -58,7 +58,7 @@ HIDDEN_DRAGON_PE_MAX = 20.0
 HIDDEN_DRAGON_LOW_MAX_PREMIUM = 0.20
 PRICE_HISTORY_MONTHS = 12
 LOW_HISTORY_MONTHS = 6
-MOPS_REVENUE_CACHE_VERSION = "mops-revenue-diagnostics-v3"
+MOPS_REVENUE_CACHE_VERSION = "mops-revenue-diagnostics-v4-two-months"
 
 
 st.set_page_config(page_title="雙龍吐珠", page_icon="🐉", layout="wide")
@@ -503,9 +503,9 @@ raw_tpex_price, diag_tpex = fetch_json_with_diagnostic(fetch_json_tpex, URL_TPEX
 data_diagnostics.append(diag_tpex)
 
 latest_rev = latest_revenue_ym()
-progress.progress(26, text=f"正在下載 MOPS 月營收（{latest_rev} 起近 4 個月）...")
+progress.progress(26, text=f"正在下載 MOPS 月營收（{latest_rev} 起近 2 個月）...")
 try:
-    df_rev = fetch_mops_recent_revenue(latest_rev, months=4, cache_version=MOPS_REVENUE_CACHE_VERSION)
+    df_rev = fetch_mops_recent_revenue(latest_rev, months=2, cache_version=MOPS_REVENUE_CACHE_VERSION)
     mops_detail = "\n".join(str(error) for error in df_rev.attrs.get("mops_errors", []))
     if df_rev.empty and not mops_detail:
         mops_detail = (

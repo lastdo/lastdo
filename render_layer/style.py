@@ -515,6 +515,39 @@ div[data-testid="stSelectbox"] > div[data-baseweb="select"] > div:focus-within {
     box-shadow: 0 4px 14px rgba(37,99,235,0.45) !important;
 }
 
+.stDownloadButton > button,
+div[data-testid="stDownloadButton"] button {
+    background: linear-gradient(135deg, var(--bg-header-end), #4f8df7) !important;
+    border: 1px solid rgba(147, 197, 253, 0.65) !important;
+    border-radius: 8px !important;
+    color: var(--text-on-header) !important;
+    font-weight: 700 !important;
+    opacity: 1 !important;
+    box-shadow: 0 2px 8px rgba(37,99,235,0.28) !important;
+}
+.stDownloadButton > button *,
+div[data-testid="stDownloadButton"] button * {
+    color: var(--text-on-header) !important;
+    opacity: 1 !important;
+}
+.stDownloadButton > button:hover,
+div[data-testid="stDownloadButton"] button:hover {
+    background: linear-gradient(135deg, #1d4ed8, #60a5fa) !important;
+    border-color: rgba(191, 219, 254, 0.9) !important;
+    color: var(--text-on-header) !important;
+}
+.stDownloadButton > button:disabled,
+div[data-testid="stDownloadButton"] button:disabled {
+    background: #e2e8f0 !important;
+    border: 1px solid #cbd5e1 !important;
+    color: #64748b !important;
+    box-shadow: none !important;
+}
+.stDownloadButton > button:disabled *,
+div[data-testid="stDownloadButton"] button:disabled * {
+    color: #64748b !important;
+}
+
 .stButton > button[kind="secondary"] {
     border-radius: 8px !important;
     transition: all 0.18s ease !important;

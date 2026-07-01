@@ -445,6 +445,47 @@ st.markdown("""
     }
     .mobile-stock-value.pos { color: var(--accent-risk); }
     .mobile-stock-value.neg { color: var(--accent-positive); }
+    .js-plotly-plot .plotly text {
+        fill: var(--text-primary) !important;
+        opacity: 1 !important;
+    }
+    .js-plotly-plot .plotly .xtitle,
+    .js-plotly-plot .plotly .ytitle {
+        fill: var(--text-primary) !important;
+    }
+    details[data-testid="stExpander"] {
+        margin-top: 10px;
+    }
+    details[data-testid="stExpander"] div[data-testid="stVerticalBlock"] {
+        gap: 0.35rem;
+    }
+    details[data-testid="stExpander"] .stock-name-text {
+        padding-top: 0 !important;
+        color: var(--text-primary);
+        font-size: 0.98rem;
+    }
+    details[data-testid="stExpander"] .status-badge {
+        margin-bottom: 2px;
+    }
+    details[data-testid="stExpander"] div[data-testid="stNumberInput"] {
+        margin-bottom: 0.4rem;
+    }
+    details[data-testid="stExpander"] div[data-testid="stNumberInput"] input {
+        background: #ffffff !important;
+        color: var(--text-primary) !important;
+        border: 1px solid #b8c7d9 !important;
+        border-radius: 8px !important;
+        min-height: 42px;
+    }
+    details[data-testid="stExpander"] div[data-testid="stNumberInput"] button {
+        background: #f8fbff !important;
+        color: var(--text-primary) !important;
+        border-color: #cbd5e1 !important;
+    }
+    details[data-testid="stExpander"] div[data-testid="stButton"] button {
+        min-height: 42px;
+        width: 100%;
+    }
     .col-hdr {
         display: none;
     }
@@ -1321,8 +1362,11 @@ if not filtered_holding_df.empty and filtered_holding_df["market_value"].notna()
             margin=dict(l=10, r=60, t=24, b=10),
             plot_bgcolor="white",
             paper_bgcolor="white",
+            font=dict(color="#132033"),
             showlegend=False,
         )
+        fig.update_xaxes(tickfont=dict(color="#132033"), title_font=dict(color="#132033"), gridcolor="#e7edf4")
+        fig.update_yaxes(tickfont=dict(color="#132033"), title_font=dict(color="#132033"), gridcolor="#e7edf4")
         st.plotly_chart(fig, use_container_width=True)
 
 # ── 自選股 / 持股清單 ─────────────────────────────────────────────────────────
