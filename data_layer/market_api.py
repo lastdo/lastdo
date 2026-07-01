@@ -28,13 +28,32 @@ TWSE_MI_INDEX_FIELDS = {
 }
 
 
+def parse_json_response(resp: requests.Response, source: str):
+    content_type = resp.headers.get("content-type", "")
+    text_preview = (resp.text or "")[:160].replace("\n", " ").replace("\r", " ")
+    if not (resp.text or "").strip():
+        raise RuntimeError(f"{source} returned empty response, status={resp.status_code}")
+    if "json" not in content_type.lower() and resp.text.lstrip().startswith("<"):
+        raise RuntimeError(
+            f"{source} returned non-JSON response, status={resp.status_code}, "
+            f"content-type={content_type}, body={text_preview}"
+        )
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise RuntimeError(
+            f"{source} JSON decode failed, status={resp.status_code}, "
+            f"content-type={content_type}, body={text_preview}"
+        ) from exc
+
+
 def fetch_json_twse(url: str) -> list:
     last_err = None
     for attempt in range(3):
         try:
             resp = requests.get(url, timeout=30, headers=DEFAULT_HEADERS)
             resp.raise_for_status()
-            return resp.json()
+            return parse_json_response(resp, "TWSE")
         except Exception as exc:
             last_err = exc
             time.sleep(2 * (attempt + 1))
@@ -53,7 +72,7 @@ def _get_tpex_json(url: str):
                 verify=verify_ssl,
             )
             resp.raise_for_status()
-            return resp.json()
+            return parse_json_response(resp, "TPEX")
         except requests.exceptions.SSLError as exc:
             last_err = exc
             if verify_ssl:
