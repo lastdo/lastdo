@@ -55,13 +55,14 @@ def load_revenue_candidates(
 ) -> tuple[pd.DataFrame, str, int]:
     latest_ym = latest_complete_revenue_ym(as_of_date)
     df_revenue = fetch_mops_recent_revenue_frame(latest_ym, months=2)
+    resolved_latest_ym = str(df_revenue.attrs.get("resolved_latest_ym") or latest_ym)
     df_metrics = build_revenue_metrics_skip_february(df_revenue, months=2)
     if df_metrics.empty:
-        return df_metrics, latest_ym, len(df_revenue)
+        return df_metrics, resolved_latest_ym, len(df_revenue)
     df_candidates = df_metrics[
         pd.to_numeric(df_metrics["avg_rev_yoy"], errors="coerce") >= thresholds.avg_rev_yoy_min
     ].copy()
-    return df_candidates.reset_index(drop=True), latest_ym, len(df_revenue)
+    return df_candidates.reset_index(drop=True), resolved_latest_ym, len(df_revenue)
 
 
 def load_candidate_universe(

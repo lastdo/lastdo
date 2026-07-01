@@ -17,6 +17,7 @@ MOPS_COMPANY_TYPES = (0, 1)
 MOPS_REVENUE_COLUMNS = ["stock_id", "rev_ym", "rev_yoy", "rev_cur", "rev_ly"]
 MOPS_REVENUE_HOST = "mopsov.twse.com.tw"
 MOPS_REVENUE_BASE = f"https://{MOPS_REVENUE_HOST}"
+MOPS_COMPLETE_MONTH_ROW_RATIO = 0.7
 MOPS_BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -311,7 +312,9 @@ def fetch_mops_month_revenue_frame(
 
 def fetch_mops_recent_revenue_frame(latest_ym: str | None = None, months: int = 1) -> pd.DataFrame:
     ym = latest_ym or latest_revenue_ym()
-    month_frames: list[pd.DataFrame] = []
+    requested_latest_ym = ym
+    scanned_month_frames: list[tuple[str, pd.DataFrame]] = []
+    skipped_empty_months: list[str] = []
     errors: list[str] = []
     target_months = max(int(months), 1)
     max_scan_months = target_months + 6
@@ -322,15 +325,62 @@ def fetch_mops_recent_revenue_frame(latest_ym: str | None = None, months: int = 
         frame = fetch_mops_month_revenue_frame(int(ym[:3]), int(ym[3:]))
         errors.extend(str(error) for error in frame.attrs.get("mops_errors", []))
         if not frame.empty:
-            month_frames.append(frame)
-            if len(month_frames) >= target_months:
+            scanned_month_frames.append((ym, frame))
+            max_rows = max(len(month_frame) for _, month_frame in scanned_month_frames)
+            min_complete_rows = max_rows * MOPS_COMPLETE_MONTH_ROW_RATIO
+            complete_months = [
+                (month_ym, month_frame)
+                for month_ym, month_frame in scanned_month_frames
+                if len(month_frame) >= min_complete_rows
+            ]
+            if len(complete_months) >= target_months:
                 break
+        else:
+            skipped_empty_months.append(ym)
         ym = previous_revenue_ym(ym)
 
-    if not month_frames:
-        return _empty_revenue_frame(errors)
+    if not scanned_month_frames:
+        result = _empty_revenue_frame(errors)
+        result.attrs["requested_latest_ym"] = requested_latest_ym
+        result.attrs["selected_rev_months"] = tuple()
+        result.attrs["complete_rev_months"] = tuple()
+        result.attrs["resolved_latest_ym"] = ""
+        result.attrs["skipped_empty_rev_months"] = tuple(skipped_empty_months)
+        result.attrs["skipped_incomplete_rev_months"] = tuple()
+        return result
 
-    result = pd.concat(month_frames, ignore_index=True).reset_index(drop=True)
+    max_rows = max(len(month_frame) for _, month_frame in scanned_month_frames)
+    min_complete_rows = max_rows * MOPS_COMPLETE_MONTH_ROW_RATIO
+    complete_months = [
+        (month_ym, month_frame)
+        for month_ym, month_frame in scanned_month_frames
+        if len(month_frame) >= min_complete_rows
+    ][:target_months]
+    incomplete_months = [
+        month_ym
+        for month_ym, month_frame in scanned_month_frames
+        if len(month_frame) < min_complete_rows
+    ]
+
+    if not complete_months:
+        result = _empty_revenue_frame(errors)
+        result.attrs["requested_latest_ym"] = requested_latest_ym
+        result.attrs["selected_rev_months"] = tuple()
+        result.attrs["complete_rev_months"] = tuple()
+        result.attrs["resolved_latest_ym"] = ""
+        result.attrs["skipped_empty_rev_months"] = tuple(skipped_empty_months)
+        result.attrs["skipped_incomplete_rev_months"] = tuple(incomplete_months)
+        return result
+
+    returned_months = [month_ym for month_ym, _ in scanned_month_frames]
+    complete_month_names = [month_ym for month_ym, _ in complete_months]
+    result = pd.concat([month_frame for _, month_frame in scanned_month_frames], ignore_index=True).reset_index(drop=True)
+    result.attrs["requested_latest_ym"] = requested_latest_ym
+    result.attrs["selected_rev_months"] = tuple(returned_months)
+    result.attrs["complete_rev_months"] = tuple(complete_month_names)
+    result.attrs["resolved_latest_ym"] = returned_months[0] if returned_months else ""
+    result.attrs["skipped_empty_rev_months"] = tuple(skipped_empty_months)
+    result.attrs["skipped_incomplete_rev_months"] = tuple(incomplete_months)
     if errors:
         result.attrs["mops_errors"] = errors[:30]
     return result

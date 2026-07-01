@@ -13,6 +13,7 @@ from backtest_data_layer.double_dragon_snapshot import (
     SnapshotDiagnostics,
     build_double_dragon_snapshot,
     load_candidate_universe,
+    load_revenue_candidates,
 )
 from backtest_render_layer.double_dragon_tables import DISPLAY_COLUMNS
 
@@ -129,6 +130,53 @@ def test_candidate_universe_filters_price_volume_before_revenue_join():
     assert diagnostics.price_rows == 3
     assert diagnostics.price_volume_candidates == 1
     assert diagnostics.revenue_candidates == 1
+
+
+def test_revenue_candidates_report_resolved_mops_month():
+    revenue_raw = pd.DataFrame(
+        {
+            "stock_id": ["1111", "1111"],
+            "rev_ym": ["11505", "11504"],
+            "rev_yoy": [30.0, 25.0],
+            "rev_cur": [100, 100],
+            "rev_ly": [80, 80],
+        }
+    )
+    revenue_raw.attrs["resolved_latest_ym"] = "11505"
+    revenue_raw.attrs["selected_rev_months"] = ("11505", "11504")
+    revenue_raw.attrs["skipped_incomplete_rev_months"] = ("11506",)
+
+    with patch("backtest_data_layer.double_dragon_snapshot.fetch_mops_recent_revenue_frame", return_value=revenue_raw):
+        candidates, revenue_month, revenue_rows = load_revenue_candidates(date(2026, 7, 1))
+
+    assert revenue_month == "11505"
+    assert revenue_rows == 2
+    assert candidates["rev_months"].tolist() == ["11505/11504"]
+
+
+def test_revenue_candidates_use_latest_two_months_per_stock():
+    revenue_raw = pd.DataFrame(
+        {
+            "stock_id": ["1111", "1111", "2222", "2222"],
+            "rev_ym": ["11506", "11505", "11505", "11504"],
+            "rev_yoy": [30.0, 25.0, 28.0, 24.0],
+            "rev_cur": [100, 100, 100, 100],
+            "rev_ly": [80, 80, 80, 80],
+        }
+    )
+    revenue_raw.attrs["resolved_latest_ym"] = "11506"
+    revenue_raw.attrs["selected_rev_months"] = ("11506", "11505", "11504")
+    revenue_raw.attrs["complete_rev_months"] = ("11505", "11504")
+    revenue_raw.attrs["skipped_incomplete_rev_months"] = ("11506",)
+
+    with patch("backtest_data_layer.double_dragon_snapshot.fetch_mops_recent_revenue_frame", return_value=revenue_raw):
+        candidates, revenue_month, revenue_rows = load_revenue_candidates(date(2026, 7, 1))
+
+    by_stock = candidates.set_index("stock_id")
+    assert revenue_month == "11506"
+    assert revenue_rows == 4
+    assert by_stock.loc["1111", "rev_months"] == "11506/11505"
+    assert by_stock.loc["2222", "rev_months"] == "11505/11504"
 
 
 def test_snapshot_returns_only_common_passed_rows():

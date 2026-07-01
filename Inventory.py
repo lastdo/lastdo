@@ -445,6 +445,24 @@ st.markdown("""
     }
     .mobile-stock-value.pos { color: var(--accent-risk); }
     .mobile-stock-value.neg { color: var(--accent-positive); }
+    .manage-stock-index {
+        color: var(--text-muted);
+        font-size: 0.72rem;
+        font-weight: 800;
+        margin-bottom: 4px;
+    }
+    .manage-stock-symbol {
+        margin-bottom: 6px;
+    }
+    .manage-stock-name {
+        padding-top: 0 !important;
+        color: var(--text-primary) !important;
+        font-size: 0.98rem;
+        line-height: 1.35;
+    }
+    .manage-stock-type {
+        margin-top: 8px;
+    }
     .js-plotly-plot .plotly text {
         fill: var(--text-primary) !important;
         opacity: 1 !important;
@@ -459,10 +477,19 @@ st.markdown("""
     details[data-testid="stExpander"] div[data-testid="stVerticalBlock"] {
         gap: 0.35rem;
     }
+    details[data-testid="stExpander"] div[data-testid="stHorizontalBlock"] {
+        align-items: flex-start;
+    }
     details[data-testid="stExpander"] .stock-name-text {
         padding-top: 0 !important;
         color: var(--text-primary);
         font-size: 0.98rem;
+    }
+    details[data-testid="stExpander"] .manage-stock-index {
+        display: none;
+    }
+    details[data-testid="stExpander"] .manage-stock-type {
+        margin-bottom: 0.3rem;
     }
     details[data-testid="stExpander"] .status-badge {
         margin-bottom: 2px;
@@ -1505,13 +1532,10 @@ else:
 
     with st.expander("管理持股 / 自選股", expanded=False):
         render_section_title("操作")
-        h0, h1, h2, h3, h4, h5 = st.columns([0.4, 1.1, 1.7, 1.0, 2.5, 2.7])
-        h0.markdown('<div class="col-hdr">#</div>', unsafe_allow_html=True)
-        h1.markdown('<div class="col-hdr">代碼</div>', unsafe_allow_html=True)
-        h2.markdown('<div class="col-hdr">股票名稱</div>', unsafe_allow_html=True)
-        h3.markdown('<div class="col-hdr">類型</div>', unsafe_allow_html=True)
-        h4.markdown('<div class="col-hdr">成本 / 股數</div>', unsafe_allow_html=True)
-        h5.markdown('<div class="col-hdr">操作</div>', unsafe_allow_html=True)
+        h_info, h_edit, h_action = st.columns([2.8, 2.6, 2.8])
+        h_info.markdown('<div class="col-hdr">股票</div>', unsafe_allow_html=True)
+        h_edit.markdown('<div class="col-hdr">成本 / 股數</div>', unsafe_allow_html=True)
+        h_action.markdown('<div class="col-hdr">操作</div>', unsafe_allow_html=True)
 
         for i, stock in enumerate(portfolio):
             row_id = str(stock.get("row_id", "")).strip()
@@ -1523,18 +1547,15 @@ else:
             default_price = _to_float(stock.get("price"))
             default_shares = _to_int(stock.get("shares"))
 
-            c0, c1, c2, c3, c4, c5 = st.columns([0.4, 1.1, 1.7, 1.0, 2.5, 2.7])
-            with c0:
-                st.markdown(f"<div style='color:var(--text-muted);font-size:0.8rem;padding-top:10px;text-align:center'>{i+1}</div>", unsafe_allow_html=True)
-            with c1:
-                st.markdown(f"<div style='padding-top:6px'><span class='sym-badge'>{symbol}</span></div>", unsafe_allow_html=True)
-            with c2:
+            c_info, c_edit, c_action = st.columns([2.8, 2.6, 2.8])
+            with c_info:
+                st.markdown(f"<div class='manage-stock-index'>{i+1}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='manage-stock-symbol'><span class='sym-badge'>{symbol}</span></div>", unsafe_allow_html=True)
                 _name_html = name if name else "<span style='color:#cbd5e1'>—</span>"
-                st.markdown(f"<div class='stock-name-text' style='padding-top:10px'>{_name_html}</div>", unsafe_allow_html=True)
-            with c3:
+                st.markdown(f"<div class='stock-name-text manage-stock-name'>{_name_html}</div>", unsafe_allow_html=True)
                 badge_class = "holding" if item_type == "持股" else "watch"
-                st.markdown(f"<div style='padding-top:10px'><span class='status-badge {badge_class}'>{item_type}</span></div>", unsafe_allow_html=True)
-            with c4:
+                st.markdown(f"<div class='manage-stock-type'><span class='status-badge {badge_class}'>{item_type}</span></div>", unsafe_allow_html=True)
+            with c_edit:
                 edit_col1, edit_col2 = st.columns(2)
                 with edit_col1:
                     edit_price = st.number_input(
@@ -1567,14 +1588,14 @@ else:
                     else:
                         st.toast(f"已更新「{symbol}」的持股資料")
                         st.rerun()
-            with c5:
+            with c_action:
                 btn_col1, btn_col2 = st.columns([3, 1])
                 with btn_col1:
                     if st.button("📈 AI 分析", key=f"analyze_{row_key}", use_container_width=True, type="primary"):
                         st.session_state["selected_symbol"] = symbol
                         st.switch_page("pages/1_app_tw.py")
                 with btn_col2:
-                    if st.button("🗑️", key=f"del_{row_key}", help=f"移除 {symbol}"):
+                    if st.button("🗑️", key=f"del_{row_key}", help=f"移除 {symbol}", use_container_width=True):
                         try:
                             delete_portfolio_item(row_id=row_id, family_id=family_id)
                         except PortfolioStoreConnectionError as exc:

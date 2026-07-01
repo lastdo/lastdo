@@ -210,6 +210,74 @@ class MarketDataContractTests(unittest.TestCase):
 
         self.assertEqual(df["rev_ym"].tolist(), ["11502", "11501"])
 
+    def test_fetch_mops_recent_revenue_uses_prior_two_months_when_last_month_unpublished(self):
+        def fake_month_frame(year, month):
+            ym = f"{year}{month:02d}"
+            if ym == "11506":
+                return pd.DataFrame(columns=mops_revenue.MOPS_REVENUE_COLUMNS)
+            return pd.DataFrame(
+                {
+                    "stock_id": ["2330"],
+                    "rev_ym": [ym],
+                    "rev_yoy": [20.0],
+                    "rev_cur": [300000],
+                    "rev_ly": [250000],
+                }
+            )
+
+        with patch("data_layer.mops_revenue.fetch_mops_month_revenue_frame", side_effect=fake_month_frame):
+            df = mops_revenue.fetch_mops_recent_revenue_frame("11506", months=2)
+
+        self.assertEqual(df["rev_ym"].tolist(), ["11505", "11504"])
+        self.assertEqual(df.attrs["requested_latest_ym"], "11506")
+        self.assertEqual(df.attrs["resolved_latest_ym"], "11505")
+        self.assertEqual(df.attrs["selected_rev_months"], ("11505", "11504"))
+        self.assertEqual(df.attrs["skipped_empty_rev_months"], ("11506",))
+
+    def test_fetch_mops_recent_revenue_skips_partial_latest_month(self):
+        def fake_month_frame(year, month):
+            ym = f"{year}{month:02d}"
+            rows = 2 if ym == "11506" else 8
+            return pd.DataFrame(
+                {
+                    "stock_id": [f"{i:04d}" for i in range(rows)],
+                    "rev_ym": [ym] * rows,
+                    "rev_yoy": [20.0] * rows,
+                    "rev_cur": [300000] * rows,
+                    "rev_ly": [250000] * rows,
+                }
+            )
+
+        with patch("data_layer.mops_revenue.fetch_mops_month_revenue_frame", side_effect=fake_month_frame):
+            df = mops_revenue.fetch_mops_recent_revenue_frame("11506", months=2)
+
+        self.assertEqual(df["rev_ym"].drop_duplicates().tolist(), ["11506", "11505", "11504"])
+        self.assertEqual(df.attrs["resolved_latest_ym"], "11506")
+        self.assertEqual(df.attrs["selected_rev_months"], ("11506", "11505", "11504"))
+        self.assertEqual(df.attrs["complete_rev_months"], ("11505", "11504"))
+        self.assertEqual(df.attrs["skipped_incomplete_rev_months"], ("11506",))
+
+    def test_fetch_mops_recent_revenue_uses_last_two_months_when_last_month_is_published(self):
+        def fake_month_frame(year, month):
+            ym = f"{year}{month:02d}"
+            return pd.DataFrame(
+                {
+                    "stock_id": ["2330"],
+                    "rev_ym": [ym],
+                    "rev_yoy": [20.0],
+                    "rev_cur": [300000],
+                    "rev_ly": [250000],
+                }
+            )
+
+        with patch("data_layer.mops_revenue.fetch_mops_month_revenue_frame", side_effect=fake_month_frame):
+            df = mops_revenue.fetch_mops_recent_revenue_frame("11506", months=2)
+
+        self.assertEqual(df["rev_ym"].tolist(), ["11506", "11505"])
+        self.assertEqual(df.attrs["resolved_latest_ym"], "11506")
+        self.assertEqual(df.attrs["selected_rev_months"], ("11506", "11505"))
+        self.assertEqual(df.attrs["skipped_empty_rev_months"], tuple())
+
     def test_fetch_mops_month_revenue_exposes_source_errors(self):
         class FakeFetcher:
             def get_market_revenue(self, year, month, market, company_type):
