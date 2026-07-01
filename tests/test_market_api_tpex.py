@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import requests
 
-from data_layer.market_api import _get_tpex_json
+from data_layer.market_api import _get_tpex_json, parse_json_response
 from data_layer.institutional_flow import (
     _find_tpex_foreign_net_columns,
     fetch_tpex_3insti,
@@ -13,6 +13,10 @@ from data_layer.institutional_flow import (
 class MarketApiTpexTests(unittest.TestCase):
     def test_tpex_json_retries_without_ssl_verification(self):
         class FakeResponse:
+            status_code = 200
+            headers = {"content-type": "application/json"}
+            text = '{"tables":[]}'
+
             def raise_for_status(self):
                 return None
 
@@ -32,6 +36,18 @@ class MarketApiTpexTests(unittest.TestCase):
 
         self.assertEqual(result, {"tables": [{"fields": [], "data": []}]})
         self.assertEqual(verify_values, [True, False])
+
+    def test_parse_json_response_reports_html_body(self):
+        class FakeResponse:
+            status_code = 200
+            headers = {"content-type": "text/html"}
+            text = "<html>maintenance</html>"
+
+            def json(self):
+                raise ValueError("not json")
+
+        with self.assertRaisesRegex(RuntimeError, "TWSE returned non-JSON response"):
+            parse_json_response(FakeResponse(), "TWSE")
 
     def test_tpex_institutional_current_openapi_columns(self):
         columns = [

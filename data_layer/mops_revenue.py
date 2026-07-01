@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from io import StringIO
+import re
 from typing import Iterable
 from urllib.parse import urljoin, urlparse, urlunparse
 
@@ -39,6 +40,30 @@ MOPS_BROWSER_HEADERS = {
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"Windows"',
 }
+
+
+def _mops_get_with_redirects(
+    session: httpx.Client,
+    fetcher: RevenueFetcher,
+    url: str,
+    referer: str | None = None,
+    max_redirects: int = 8,
+) -> httpx.Response:
+    current_url = str(url)
+    current_referer = referer
+    for _ in range(max_redirects + 1):
+        response = session.get(
+            current_url,
+            headers=_mops_request_headers(fetcher, current_url, referer=current_referer),
+        )
+        if response.status_code not in (301, 302, 303, 307, 308):
+            return response
+        location = response.headers.get("location")
+        if not location:
+            return response
+        current_referer = current_url
+        current_url = urljoin(str(response.url), location)
+    return response
 
 MOPS_FIELD_ALIASES = {
     "stock_id": (("\u516c\u53f8", "\u4ee3\u865f"),),
@@ -127,6 +152,30 @@ def _parse_mops_revenue_tables(dfs: list[pd.DataFrame]) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
+
+
+def _read_mops_revenue_sections(html: str) -> list[pd.DataFrame]:
+    if "FOR SECURITY REASONS" in html or "PAGE CAN NOT BE ACCESSED" in html:
+        raise RuntimeError("MOPS security page returned instead of revenue table")
+
+    table_sections = re.findall(r"<table\b.*?</table>", html, flags=re.IGNORECASE | re.DOTALL)
+    if not table_sections:
+        return pd.read_html(StringIO(html))
+
+    frames: list[pd.DataFrame] = []
+    errors: list[str] = []
+    for section in table_sections:
+        try:
+            frames.extend(pd.read_html(StringIO(section)))
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+
+    if frames:
+        return frames
+    if errors:
+        raise ValueError("; ".join(errors))
+    return []
 
 
 def _normalize_revenue_frame(raw: object, market: str, company_type: int, ym: str) -> pd.DataFrame:
@@ -232,24 +281,22 @@ def _fetch_market_revenue_with_redirects(
             try:
                 with httpx.Client(
                     timeout=timeout,
-                    follow_redirects=True,
+                    follow_redirects=False,
                     verify=verify_ssl,
                     max_redirects=8,
                 ) as session:
                     _warm_mops_browser_session(session, fetcher, url)
-                    response = session.get(url, headers=headers)
-                    if response.is_redirect and response.headers.get("location"):
-                        redirect_url = urljoin(str(response.url), response.headers["location"])
-                        response = session.get(
-                            redirect_url,
-                            headers=_mops_request_headers(fetcher, redirect_url, referer=url),
-                        )
+                    response = _mops_get_with_redirects(session, fetcher, url)
                 if response.status_code == 404:
                     errors.append(f"{url} returned 404")
                     break
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get("location") or "missing Location"
+                    errors.append(f"{url} HTTP {response.status_code} redirect unresolved: {location}")
+                    break
                 response.raise_for_status()
                 response.encoding = "big5"
-                dfs = pd.read_html(StringIO(response.text))
+                dfs = _read_mops_revenue_sections(response.text)
                 return _parse_mops_revenue_tables(dfs)
             except httpx.ConnectError:
                 if not verify_ssl:

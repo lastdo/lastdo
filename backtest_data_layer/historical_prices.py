@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 import requests
 
-from data_layer.market_api import DEFAULT_HEADERS, URL_TWSE_MI_INDEX, parse_twse_mi_index_price_rows
+from data_layer.market_api import DEFAULT_HEADERS, URL_TWSE_MI_INDEX, parse_json_response, parse_twse_mi_index_price_rows
 from data_layer.market_data import clean_numeric
 
 
@@ -30,7 +30,7 @@ def _fetch_json(url: str):
         try:
             response = requests.get(url, timeout=30, headers=DEFAULT_HEADERS)
             response.raise_for_status()
-            return response.json()
+            return parse_json_response(response, "historical price")
         except Exception as exc:
             last_exc = exc
     raise last_exc
