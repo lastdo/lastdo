@@ -890,11 +890,7 @@ def build_portfolio_rows(portfolio: list, stock_names: dict, market_snapshot: di
             if sell_fee is not None and sell_tax is not None
             else None
         )
-        unrealized_pnl = (
-            gross_unrealized_pnl - exit_cost
-            if gross_unrealized_pnl is not None and exit_cost is not None
-            else gross_unrealized_pnl
-        )
+        unrealized_pnl = gross_unrealized_pnl
         unrealized_return = (
             unrealized_pnl / invested_cost * 100
             if unrealized_pnl is not None and invested_cost
@@ -1216,10 +1212,10 @@ render_today_investment_dashboard(
 )
 
 summary_cards = [
-    ("總投入成本", format_money(total_cost), f"{len(holding_df)} 檔持股", "c-green", ""),
+    ("兩平成本合計", format_money(total_cost), f"{len(holding_df)} 檔持股", "c-green", ""),
     ("目前總市值", format_money(total_market), f"{priced_holding_count} 檔已取得最新收盤價", "c-blue", ""),
-    ("未實現損益", format_money(unrealized_pnl), f"已扣預估賣出費稅 {format_money(total_exit_cost)}", "c-red" if (unrealized_pnl or 0) >= 0 else "c-green", pnl_class(unrealized_pnl)),
-    ("未實現報酬率", format_pct(unrealized_return), "淨損益 / 總投入成本", "c-purple", pnl_class(unrealized_return)),
+    ("未實現損益", format_money(unrealized_pnl), "最新價 - 損益兩平價，再乘以股數", "c-red" if (unrealized_pnl or 0) >= 0 else "c-green", pnl_class(unrealized_pnl)),
+    ("未實現報酬率", format_pct(unrealized_return), "損益 / 兩平成本合計", "c-purple", pnl_class(unrealized_return)),
     ("今日損益", format_money(today_pnl), "最新收盤價 - 前一交易日收盤價", "c-amber", pnl_class(today_pnl)),
 ]
 
@@ -1244,7 +1240,7 @@ with form_col:
         with col1:
             new_symbol = st.text_input("股票代碼", placeholder="例：2330")
         with col2:
-            new_price = st.text_input("持有成本價（選填）", placeholder="例：150.5")
+            new_price = st.text_input("損益兩平價（選填）", placeholder="例：241.4")
         with col3:
             new_shares = st.text_input("持有股數（選填）", placeholder="例：1000")
         with col4:
@@ -1416,12 +1412,12 @@ else:
         display_holding_df = filtered_holding_df.copy()
         display_holding_df = display_holding_df.sort_values("market_value", ascending=False, na_position="last")
         display_holding_df["股票"] = display_holding_df["symbol"] + " " + display_holding_df["name"].fillna("")
-        display_holding_df["持有成本"] = display_holding_df["cost_price"]
+        display_holding_df["損益兩平價"] = display_holding_df["cost_price"]
         display_holding_df["股數"] = display_holding_df["shares"]
         display_holding_df["最新價"] = display_holding_df["latest_price"]
-        display_holding_df["投入成本"] = display_holding_df["invested_cost"]
+        display_holding_df["兩平成本"] = display_holding_df["invested_cost"]
         display_holding_df["目前市值"] = display_holding_df["market_value"]
-        display_holding_df["毛損益"] = display_holding_df["gross_unrealized_pnl"]
+        display_holding_df["兩平損益"] = display_holding_df["gross_unrealized_pnl"]
         display_holding_df["賣出手續費"] = display_holding_df["sell_fee"]
         display_holding_df["交易稅"] = display_holding_df["sell_tax"]
         display_holding_df["未實現損益"] = display_holding_df["unrealized_pnl"]
@@ -1431,7 +1427,7 @@ else:
         display_holding_df["價格日"] = display_holding_df["price_date"].replace("", "—")
         compact_columns = [
             "股票",
-            "持有成本",
+            "損益兩平價",
             "股數",
             "最新價",
             "目前市值",
@@ -1443,12 +1439,12 @@ else:
         ]
         full_columns = [
             "股票",
-            "持有成本",
+            "損益兩平價",
             "股數",
             "最新價",
-            "投入成本",
+            "兩平成本",
             "目前市值",
-            "毛損益",
+            "兩平損益",
             "賣出手續費",
             "交易稅",
             "未實現損益",
@@ -1460,12 +1456,12 @@ else:
         display_columns = compact_columns if holding_view_mode == "精簡檢視" else full_columns
         render_mobile_holding_cards(display_holding_df)
         styled_holding_df = display_holding_df[display_columns].style.format({
-            "持有成本": lambda x: format_money(x, 2),
+            "損益兩平價": lambda x: format_money(x, 2),
             "股數": lambda x: f"{int(x):,} 股" if pd.notna(x) else "—",
             "最新價": lambda x: format_money(x, 2),
-            "投入成本": format_money,
+            "兩平成本": format_money,
             "目前市值": format_money,
-            "毛損益": format_signed_money,
+            "兩平損益": format_signed_money,
             "賣出手續費": format_money,
             "交易稅": format_money,
             "未實現損益": format_signed_money,
@@ -1474,7 +1470,7 @@ else:
             "持倉比例": lambda x: f"{x:.2f}%" if pd.notna(x) else "—",
         })
         style_targets = [
-            ("毛損益", "gross_unrealized_pnl"),
+            ("兩平損益", "gross_unrealized_pnl"),
             ("未實現損益", "unrealized_pnl"),
             ("未實現報酬率", "unrealized_return"),
             ("今日損益", "today_pnl"),
@@ -1534,7 +1530,7 @@ else:
         render_section_title("操作")
         h_info, h_edit, h_action = st.columns([2.8, 2.6, 2.8])
         h_info.markdown('<div class="col-hdr">股票</div>', unsafe_allow_html=True)
-        h_edit.markdown('<div class="col-hdr">成本 / 股數</div>', unsafe_allow_html=True)
+        h_edit.markdown('<div class="col-hdr">兩平價 / 股數</div>', unsafe_allow_html=True)
         h_action.markdown('<div class="col-hdr">操作</div>', unsafe_allow_html=True)
 
         for i, stock in enumerate(portfolio):
