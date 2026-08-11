@@ -70,11 +70,16 @@ def fetch_finmind_price_frame(
     sleep_seconds: float = 1.2,
     raise_on_rate_limit: bool = False,
 ) -> tuple[pd.DataFrame, int | None, str, object]:
+    start_text = str(start_date).strip()
+    end_text = str(end_date).strip()
+    if not start_text or not end_text:
+        raise ValueError("FinMind historical price requires start_date and end_date")
+
     params = {
         "dataset": "TaiwanStockPrice",
-        "data_id": symbol,
-        "start_date": start_date,
-        "end_date": end_date,
+        "data_id": str(symbol).strip(),
+        "start_date": start_text,
+        "end_date": end_text,
     }
     if token:
         params["token"] = token
