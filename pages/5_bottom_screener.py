@@ -11,6 +11,7 @@ from data_layer.data_diagnostics import (
     fetch_json_with_diagnostic,
     make_finmind_diagnostic,
 )
+from data_layer.finmind_api import fetch_finmind_price_frame
 from data_layer.historical_price_service import clean_price_history, fetch_cached_finmind_price_history
 from data_layer.market_data import build_latest_revenue_view, build_price_snapshot
 from data_layer.mops_revenue import latest_revenue_ym
@@ -41,6 +42,8 @@ from render_layer.screener_common import (
 )
 
 load_dotenv()
+
+TTM_EPS_MIN = 5.0
 
 
 def build_alert_flags(result_df: pd.DataFrame, rev_growth_floor: float, rebound_ceiling: float) -> pd.DataFrame:
@@ -88,6 +91,7 @@ def render_bottom_tag_explainer(
     rev_growth_min: float,
     price_min: float,
     vol_min: int,
+    ttm_eps_min: float,
 ) -> None:
     st.markdown(
         f"""
@@ -109,6 +113,7 @@ def render_bottom_tag_explainer(
 """
     )
     st.caption("欄位對應：rebound_pct=自底部漲幅、latest_hist_vol_lot=最新一日歷史量(張)、avg_vol_20=近20日均量(張)。")
+    st.caption(f"TTM EPS 門檻：> {ttm_eps_min:.0f}（收盤價 / 官方本益比反推）。")
 
 # ─────────────────────────────────────────────
 # API 端點
@@ -184,20 +189,24 @@ with st.sidebar:
         help="用近 N 個月最低價作為底部支撐價格。",
     ))
     rebound_max = st.number_input(
-        "自底部起漲幅 小於等於（%）", value=15.0, min_value=0.0, max_value=100.0, step=1.0,
-        help="最新收盤價相對近半年支撐價的漲幅；預設 15%。",
+        "自底部起漲幅 小於等於（%）", value=20.0, min_value=0.0, max_value=100.0, step=1.0,
+        help="最新收盤價相對近半年支撐價的漲幅；預設 20%。",
     )
     rev_growth_min = st.number_input(
-        "月營收(單月) 年成長率 大於（%）", value=5.0, min_value=-100.0, max_value=1000.0, step=1.0,
+        "月營收(單月) 年成長率 大於（%）", value=10.0, min_value=-100.0, max_value=1000.0, step=1.0,
         help="最新單月月營收年增率（去年同月增減%）。",
     )
     vol_min = st.number_input(
-        "前一日成交量 至少（張）", value=500, min_value=0, step=100,
+        "前一日成交量 至少（張）", value=1000, min_value=0, step=100,
         help="使用 TWSE/TPEX 最新交易日成交量，單位為張。",
     )
     price_min = st.number_input(
         "股價 大於（元）", value=100.0, min_value=0.0, step=5.0,
         help="先剔除 100 元以下股票，降低低價股造成的候選數量。",
+    )
+    ttm_eps_min = st.number_input(
+        "TTM EPS 最低值", value=TTM_EPS_MIN, min_value=0.0, step=0.5,
+        help="以收盤價 / 官方本益比反推近四季 EPS。",
     )
     st.markdown("**操作**")
     run_btn = st.button("🔍 開始選股", use_container_width=True, type="primary")
@@ -360,7 +369,7 @@ if not run_btn:
         _view = render_result_view_selector("bottom_result_view")
         if _view == "標記說明":
             render_alert_summary(_disp)
-            render_bottom_tag_explainer(support_months, rebound_max, rev_growth_min, price_min, int(vol_min))
+            render_bottom_tag_explainer(support_months, rebound_max, rev_growth_min, price_min, int(vol_min), ttm_eps_min)
         elif _view == "明細表":
             render_bottom_table(_disp)
             render_watchlist_adder(_r, family_id, finmind_token)
@@ -397,9 +406,8 @@ if not run_btn:
 # ─────────────────────────────────────────────
 # 共用函式
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=86400, show_spinner=False)
 def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token: str = "") -> pd.DataFrame:
-    df, status_code, msg, retry_after = fetch_cached_finmind_price_history(
+    df, status_code, msg, retry_after = fetch_finmind_price_frame(
         symbol,
         start_date,
         end_date,
@@ -410,9 +418,13 @@ def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token
     )
     if status_code in (402, 403, 429):
         raise RuntimeError(f"FINMIND_LIMIT:{status_code}:{retry_after}:{msg}")
-    if status_code != 200 or df.empty:
-        return pd.DataFrame()
+    if status_code != 200:
+        raise RuntimeError(f"FINMIND_FETCH:{status_code}:{retry_after}:{msg}")
+    if df.empty:
+        raise RuntimeError(f"FINMIND_EMPTY:{status_code}:{retry_after}:{msg}")
     df = clean_price_history(df, required_columns=("date", "low", "close"))
+    if df.empty:
+        raise RuntimeError(f"FINMIND_SCHEMA:{status_code}:{retry_after}:missing date/low/close")
     return df[["date", "open", "high", "low", "close", "volume"]]
 
 
@@ -468,13 +480,26 @@ raw_tpex_price, _diag = fetch_json_with_diagnostic(fetch_json_tpex, URL_TPEX_PRI
 data_diagnostics.append(_diag)
 
 _latest_rev_ym = latest_revenue_ym()
-progress.progress(24, text=f"💰 取得 MOPS 月營收（{_latest_rev_ym} 起近 2 月）...")
+progress.progress(24, text=f"💰 取得 MOPS 月營收（{_latest_rev_ym} 起最新可用月份）...")
 try:
-    df_rev = fetch_mops_recent_revenue(_latest_rev_ym, months=2)
+    df_rev = fetch_mops_recent_revenue(_latest_rev_ym, months=1)
+    _rev_selected_months = tuple(df_rev.attrs.get("selected_rev_months", ()))
+    _rev_complete_months = tuple(df_rev.attrs.get("complete_rev_months", ()))
+    _rev_skipped_empty = tuple(df_rev.attrs.get("skipped_empty_rev_months", ()))
+    _rev_skipped_incomplete = tuple(df_rev.attrs.get("skipped_incomplete_rev_months", ()))
+    _rev_detail = (
+        f"requested={_latest_rev_ym}; "
+        f"resolved={df_rev.attrs.get('resolved_latest_ym', '') or '-'}; "
+        f"selected={','.join(map(str, _rev_selected_months)) or '-'}; "
+        f"complete={','.join(map(str, _rev_complete_months)) or '-'}; "
+        f"skipped_empty={','.join(map(str, _rev_skipped_empty)) or '-'}; "
+        f"skipped_incomplete={','.join(map(str, _rev_skipped_incomplete)) or '-'}"
+    )
     data_diagnostics.append(
         DataSourceDiagnostic(
             source="MOPS 月營收",
             status=STATUS_COMPLETE if not df_rev.empty else STATUS_FAILED,
+            detail=_rev_detail,
             message="抓取成功。" if not df_rev.empty else "MOPS 月營收回傳空資料。",
             records=len(df_rev),
         )
@@ -544,7 +569,7 @@ if df_public_pe.empty:
 
 df_candidates = attach_public_valuation(df_candidates, df_public_pe)
 df_candidates = df_candidates[
-    pd.to_numeric(df_candidates["ttm_eps"], errors="coerce") > 3
+    pd.to_numeric(df_candidates["ttm_eps"], errors="coerce") > ttm_eps_min
 ].copy().reset_index(drop=True)
 n_candidates = len(df_candidates)
 
@@ -554,7 +579,7 @@ if n_candidates == 0:
     st.stop()
 
 df_history_targets = df_candidates.sort_values(
-    ["rev_yoy", "vol_lot"], ascending=[False, False]
+    ["close", "rev_yoy", "vol_lot"], ascending=[False, False, False]
 ).reset_index(drop=True)
 
 st.caption(
@@ -588,9 +613,9 @@ def fetch_support_row(row_data: dict):
         err = str(e)
         if "FINMIND_LIMIT" in err:
             return "banned", err
-        return "failed", sid
-    except Exception:
-        return "failed", sid
+        return "failed", f"{sid}: {err}"
+    except Exception as exc:
+        return "failed", f"{sid}: {type(exc).__name__}: {exc}"
 
 
 
@@ -701,12 +726,23 @@ history_bar.progress(1.0, text="✅ 歷史股價查詢完成")
 df_support = pd.DataFrame(support_rows)
 if df_support.empty:
     progress.progress(100, text="✅ 完成")
+    render_data_diagnostics(data_diagnostics, expanded=True)
+    if history_failed:
+        st.caption("歷史股價查詢失敗樣本：")
+        st.code("\n".join(str(item) for item in history_failed[:10]))
     st.warning("⚠️ 歷史股價資料不足，無法計算近半年支撐價。請稍後再試或降低前置條件。")
     st.stop()
 
+df_support = df_support.sort_values(
+    ["close", "rebound_pct"], ascending=[False, True]
+).reset_index(drop=True)
+
 df_result = df_support[
     (df_support["rebound_pct"] >= 0) & (df_support["rebound_pct"] <= rebound_max)
-].copy().reset_index(drop=True)
+].copy()
+df_result = df_result.sort_values(
+    ["close", "rebound_pct"], ascending=[False, True]
+).reset_index(drop=True)
 
 # ─────────────────────────────────────────────
 # Step 6：估值篩選已移除
@@ -781,7 +817,7 @@ st.subheader(f"📋 底部剛起漲名單（共 {count} 檔，以收盤價降冪
 view = render_result_view_selector("bottom_result_view")
 if view == "標記說明":
     render_alert_summary(display_df)
-    render_bottom_tag_explainer(support_months, rebound_max, rev_growth_min, price_min, int(vol_min))
+    render_bottom_tag_explainer(support_months, rebound_max, rev_growth_min, price_min, int(vol_min), ttm_eps_min)
 elif view == "明細表":
     render_bottom_table(display_df)
     render_watchlist_adder(df_result, family_id, finmind_token)
