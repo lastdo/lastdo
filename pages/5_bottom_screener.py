@@ -408,9 +408,9 @@ if not run_btn:
 # ─────────────────────────────────────────────
 def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token: str = "") -> pd.DataFrame:
     df, status_code, msg, retry_after = fetch_finmind_price_frame(
-        symbol,
-        start_date,
-        end_date,
+        symbol=symbol,
+        start_date=str(start_date),
+        end_date=str(end_date),
         token=token,
         timeout=30,
         sleep_seconds=1.2,
@@ -419,9 +419,9 @@ def get_finmind_price_history(symbol: str, start_date: str, end_date: str, token
     if status_code in (402, 403, 429):
         raise RuntimeError(f"FINMIND_LIMIT:{status_code}:{retry_after}:{msg}")
     if status_code != 200:
-        raise RuntimeError(f"FINMIND_FETCH:{status_code}:{retry_after}:{msg}")
+        raise RuntimeError(f"FINMIND_FETCH:{status_code}:{retry_after}:{start_date}:{end_date}:{msg}")
     if df.empty:
-        raise RuntimeError(f"FINMIND_EMPTY:{status_code}:{retry_after}:{msg}")
+        raise RuntimeError(f"FINMIND_EMPTY:{status_code}:{retry_after}:{start_date}:{end_date}:{msg}")
     df = clean_price_history(df, required_columns=("date", "low", "close"))
     if df.empty:
         raise RuntimeError(f"FINMIND_SCHEMA:{status_code}:{retry_after}:missing date/low/close")
