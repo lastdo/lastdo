@@ -22,12 +22,22 @@ from data_layer.app_common import get_runtime_secret
 from data_layer.time_utils import taipei_now, taipei_today
 from data_layer.portfolio_store import get_default_family_id
 from data_layer.public_valuation import attach_public_valuation, fetch_public_pe_ratios_with_diagnostics
+from data_layer.quality_rules import (
+    INDUSTRY_AMBIGUOUS,
+    apply_shadow_quality_rules,
+    calculate_three_year_average_net_margin,
+    classify_ambiguous_industry_with_groq,
+    classify_industry_category,
+)
 from data_layer.screener_data import (
     URL_TPEX_PRICE,
+    fetch_screener_financial_statements,
     fetch_screener_mops_revenue as fetch_mops_recent_revenue,
+    fetch_screener_stock_info,
     fetch_tpex_price_rows as fetch_json_tpex,
     format_retry_at,
     format_wait_time,
+    parse_finmind_limit_status,
     parse_finmind_retry_seconds,
 )
 from render_layer.diagnostics import render_data_diagnostics
@@ -44,6 +54,74 @@ from render_layer.screener_common import (
 load_dotenv()
 
 TTM_EPS_MIN = 5.0
+
+
+def classify_bottom_ambiguous_industry(
+    stock_id: str,
+    stock_name: str,
+    industry_category: str,
+    groq_api_key: str,
+) -> dict:
+    return classify_ambiguous_industry_with_groq(
+        stock_id,
+        stock_name,
+        industry_category,
+        groq_api_key,
+    )
+
+
+def build_bottom_industry_audit_rows(
+    result_df: pd.DataFrame,
+    stock_info_df: pd.DataFrame,
+    groq_api_key: str,
+) -> pd.DataFrame:
+    if result_df.empty:
+        return pd.DataFrame()
+
+    info_lookup = {}
+    if not stock_info_df.empty and "stock_id" in stock_info_df.columns:
+        info_lookup = stock_info_df.drop_duplicates("stock_id").set_index("stock_id").to_dict("index")
+
+    rows = []
+    for stock in result_df.drop_duplicates("stock_id").to_dict("records"):
+        stock_id = str(stock["stock_id"])
+        raw_stock_name = stock.get("stock_name")
+        stock_name = (
+            str(raw_stock_name).strip()
+            if raw_stock_name is not None and not pd.isna(raw_stock_name)
+            else stock_id
+        )
+        info = info_lookup.get(stock_id, {})
+        raw_industry_category = info.get("industry_category")
+        industry_category = (
+            str(raw_industry_category).strip()
+            if raw_industry_category is not None and not pd.isna(raw_industry_category)
+            else ""
+        )
+        classification = classify_industry_category(industry_category)
+        if classification["industry_classification"] == INDUSTRY_AMBIGUOUS:
+            classification = classify_bottom_ambiguous_industry(
+                stock_id,
+                stock_name,
+                industry_category,
+                groq_api_key,
+            )
+        rows.append(
+            {
+                "stock_id": stock_id,
+                "industry_category": industry_category or "資料不足",
+                **classification,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def attach_bottom_shadow_audit(result_df: pd.DataFrame, audit_df: pd.DataFrame) -> pd.DataFrame:
+    if result_df.empty or audit_df.empty:
+        return result_df.copy()
+    audit_columns = [column for column in audit_df.columns if column != "stock_id"]
+    base = result_df.drop(columns=[column for column in audit_columns if column in result_df.columns])
+    return base.merge(audit_df, on="stock_id", how="left")
 
 
 def build_alert_flags(result_df: pd.DataFrame, rev_growth_floor: float, rebound_ceiling: float) -> pd.DataFrame:
@@ -180,7 +258,13 @@ with st.sidebar:
         "FinMind Token（選填）",
         value=get_runtime_secret("FINMIND_TOKEN", ""),
         type="password",
-        help="用於查詢通過前置條件股票的近半年歷史股價；估值改採官方上市櫃API。",
+        help="用於查詢近半年歷史股價與三年淨利率；估值改採官方上市櫃API。",
+    ).strip()
+    groq_api_key = st.text_input(
+        "Groq API Key（模糊產業補判）",
+        value=get_runtime_secret("GROQ_API_KEY", ""),
+        type="password",
+        help="只有官方產業別屬於模糊分類時才呼叫 Groq；失敗或未提供時不會直接排除。",
     ).strip()
 
     st.markdown("**核心條件**")
@@ -221,6 +305,7 @@ with st.sidebar:
     st.caption("📡 股價：TWSE + TPEX OpenAPI（免費）；月營收：MOPS")
     st.caption("📡 近半年歷史股價：FinMind TaiwanStockPrice（三線程查詢）")
     st.caption("📡 本益比：官方上市櫃 API")
+    st.caption("🧪 影子規則：產業分類 + 最近三個完整年度平均淨利率")
     st.caption(INVESTMENT_DISCLAIMER)
 
 
@@ -233,6 +318,14 @@ def make_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
         "stock_id": "股票代碼",
         "stock_name": "股票名稱",
         "market": "市場",
+        "industry_category": "產業別",
+        "industry_classification_label": "產業判定",
+        "industry_classification_source": "判定來源",
+        "industry_reason": "產業判定說明",
+        "net_margin_summary": "三年年均淨利率",
+        "net_margin_trend_label": "淨利率趨勢",
+        "shadow_rule_status": "新規則結果",
+        "shadow_exclusion_reason": "新規則排除原因",
         "close": "收盤價(元)",
         "support_price": "近半年支撐價(元)",
         "support_date": "支撐日期",
@@ -242,11 +335,17 @@ def make_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
         "rev_ym": "最新營收年月",
         "history_days": "歷史交易日數",
     }
-    _cols = [
+    _base_cols = [
         "警示標記", "股票代碼", "股票名稱", "市場", "收盤價(元)", "近半年支撐價(元)", "支撐日期",
         "自底部漲幅(%)", "前一日成交量(張)", "單月營收年增率(%)", "最新營收年月", "歷史交易日數",
     ]
-    display_df = result_df.rename(columns=_rename)[_cols]
+    _shadow_cols = [
+        "產業別", "產業判定", "判定來源", "產業判定說明", "三年年均淨利率",
+        "淨利率趨勢", "新規則結果", "新規則排除原因",
+    ]
+    renamed = result_df.rename(columns=_rename)
+    _cols = _base_cols[:4] + [col for col in _shadow_cols if col in renamed.columns] + _base_cols[4:]
+    display_df = renamed[_cols].copy()
     for col in ["收盤價(元)", "近半年支撐價(元)", "自底部漲幅(%)", "單月營收年增率(%)"]:
         display_df[col] = pd.to_numeric(display_df[col], errors="coerce").round(2)
     display_df["前一日成交量(張)"] = pd.to_numeric(
@@ -283,6 +382,14 @@ def render_bottom_table(display_df: pd.DataFrame) -> None:
             code_col: st.column_config.TextColumn(code_col, width=74),
             name_col: st.column_config.TextColumn(name_col, width=108),
             market_col: st.column_config.TextColumn(market_col, width=64),
+            "產業別": st.column_config.TextColumn("產業別", width=108),
+            "產業判定": st.column_config.TextColumn("產業判定", width=106),
+            "判定來源": st.column_config.TextColumn("判定來源", width=110),
+            "產業判定說明": st.column_config.TextColumn("產業判定說明", width=300),
+            "三年年均淨利率": st.column_config.TextColumn("三年年均淨利率", width=270),
+            "淨利率趨勢": st.column_config.TextColumn("淨利率趨勢", width=116),
+            "新規則結果": st.column_config.TextColumn("新規則結果", width=150),
+            "新規則排除原因": st.column_config.TextColumn("新規則排除原因", width=320),
             close_col: st.column_config.NumberColumn(close_col, width=92, format="%.2f"),
             support_col: st.column_config.NumberColumn(support_col, width=124, format="%.2f"),
             support_date_col: st.column_config.TextColumn(support_date_col, width=96),
@@ -293,6 +400,82 @@ def render_bottom_table(display_df: pd.DataFrame) -> None:
             history_col: st.column_config.NumberColumn(history_col, width=104, format="%d"),
         },
     )
+
+
+def render_bottom_shadow_comparison(
+    result_df: pd.DataFrame,
+    rev_growth_floor: float,
+    rebound_ceiling: float,
+    file_suffix: str,
+) -> None:
+    if result_df.empty:
+        return
+
+    has_shadow_audit = "shadow_excluded" in result_df.columns
+    if has_shadow_audit:
+        excluded_mask = result_df["shadow_excluded"].fillna(False).astype(bool)
+        after_df = result_df[~excluded_mask].copy()
+        excluded_df = result_df[excluded_mask].copy()
+        pending = result_df.get("shadow_rule_status", pd.Series("", index=result_df.index)).eq(
+            "待確認（暫不排除）"
+        )
+    else:
+        after_df = result_df.copy()
+        excluded_df = result_df.iloc[0:0].copy()
+        pending = pd.Series(False, index=result_df.index)
+        st.warning("目前是舊版暫存結果，尚無影子規則欄位；請重新執行選股。")
+
+    metric1, metric2, metric3, metric4 = st.columns(4)
+    metric1.metric("改前結果", f"{len(result_df)} 檔")
+    metric2.metric("新規則暫留", f"{len(after_df)} 檔")
+    metric3.metric("新規則會排除", f"{len(excluded_df)} 檔")
+    metric4.metric("待確認", f"{int(pending.sum())} 檔")
+
+    with st.expander("查看影子規則定義", expanded=False):
+        st.markdown(
+            """
+- **傳統產業**：依 FinMind 官方產業別對照固定名單；模糊分類才交給 Groq 補判。
+- **淨利率下滑**：每季淨利率 = 本期淨利 ÷ 營業收入；最近三個完整年度各取 Q1～Q4 算術平均，且必須符合「最早年度 > 中間年度 > 最新年度」。
+- **保守處理**：產業或財報資料不足時標成「待確認（暫不排除）」，原始結果永遠保留。
+"""
+        )
+
+    tab_before, tab_after, tab_excluded = st.tabs(
+        ["原規則（改前）", "套用新規則後", "新規則排除追蹤"]
+    )
+    for tab, frame, caption, label, prefix in [
+        (
+            tab_before,
+            result_df,
+            "完整保留原本底部起漲條件入選股票。",
+            "下載改前完整清單 CSV",
+            "底部剛起漲_改前",
+        ),
+        (
+            tab_after,
+            after_df,
+            "僅排除新規則明確命中者；資料不足股票仍暫時保留。",
+            "下載新規則暫留清單 CSV",
+            "底部剛起漲_新規則暫留",
+        ),
+        (
+            tab_excluded,
+            excluded_df,
+            "列出新規則會排除的股票與原因，原始清單沒有被刪除。",
+            "下載新規則排除追蹤 CSV",
+            "底部剛起漲_新規則排除",
+        ),
+    ]:
+        with tab:
+            st.caption(caption)
+            display = make_display_df(build_alert_flags(frame, rev_growth_floor, rebound_ceiling))
+            render_bottom_table(display)
+            st.download_button(
+                label,
+                dataframe_to_csv_bytes(display),
+                f"{prefix}_{file_suffix}.csv",
+                "text/csv",
+            )
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -375,11 +558,21 @@ if not run_btn:
             render_watchlist_adder(_r, family_id, finmind_token)
         else:
             st.caption("這是上次執行結果；若要更新資料，請重新執行篩選。")
-            st.caption("資料來源：股價來自 TWSE + TPEX OpenAPI；月營收來自 MOPS；歷史股價來自 FinMind TaiwanStockPrice。")
+            st.caption(
+                "資料來源：股價來自 TWSE + TPEX OpenAPI；月營收來自 MOPS；歷史股價來自 FinMind TaiwanStockPrice；"
+                "影子規則使用 FinMind 產業別與財報。"
+            )
         _csv = dataframe_to_csv_bytes(_disp)
         st.download_button(
             "⬇️ 下載 CSV（Excel 可直接開啟）", _csv,
             f"底部剛起漲選股_{taipei_now().strftime('%Y%m%d')}.csv", "text/csv",
+        )
+        st.subheader("🧪 影子規則比較")
+        render_bottom_shadow_comparison(
+            _r,
+            rev_growth_min,
+            rebound_max,
+            taipei_now().strftime("%Y%m%d"),
         )
         st.stop()
 
@@ -744,6 +937,169 @@ df_result = df_result.sort_values(
     ["close", "rebound_pct"], ascending=[False, True]
 ).reset_index(drop=True)
 
+if not df_result.empty:
+    progress.progress(84, text="取得產業分類並建立影子規則...")
+    try:
+        df_stock_info = fetch_screener_stock_info(finmind_token)
+        data_diagnostics.append(
+            make_finmind_diagnostic(
+                "FinMind 台股產業分類",
+                200 if not df_stock_info.empty else None,
+                "",
+                records=len(df_stock_info),
+            )
+        )
+    except RuntimeError as exc:
+        df_stock_info = pd.DataFrame()
+        industry_error = str(exc)
+        data_diagnostics.append(
+            make_finmind_diagnostic(
+                "FinMind 台股產業分類",
+                parse_finmind_limit_status(industry_error),
+                industry_error,
+                records=0,
+                sample_ids=df_result["stock_id"].head(10).tolist(),
+            )
+        )
+        st.warning("產業分類目前無法完整取得；相關股票標成待確認，不會直接排除。")
+    except Exception as exc:
+        df_stock_info = pd.DataFrame()
+        data_diagnostics.append(
+            DataSourceDiagnostic(
+                source="FinMind 台股產業分類",
+                status=STATUS_FAILED,
+                message="產業分類抓取失敗，影子規則將保守保留。",
+                detail=f"{type(exc).__name__}: {exc}",
+                records=0,
+            )
+        )
+
+    industry_audit_df = build_bottom_industry_audit_rows(df_result, df_stock_info, groq_api_key)
+
+    financial_targets = df_result.drop_duplicates("stock_id").to_dict("records")
+    financial_start_str = f"{end_date.year - 4}-01-01"
+    financial_iter = iter(financial_targets)
+    financial_pending = {}
+    financial_rows = []
+    financial_failed = []
+    financial_rate_limit = ""
+    financial_done = 0
+    progress.progress(88, text=f"計算連三年平均淨利率：0 / {len(financial_targets)} 檔...")
+
+    def fetch_bottom_financial_metrics(row_data: dict):
+        sid = str(row_data["stock_id"])
+        try:
+            financial_df = fetch_screener_financial_statements(
+                sid,
+                financial_start_str,
+                end_str,
+                finmind_token,
+                sleep_seconds=2.0,
+            )
+            metrics = calculate_three_year_average_net_margin(financial_df)
+            return "ok", {"stock_id": sid, **metrics}
+        except RuntimeError as exc:
+            error_text = str(exc)
+            if "FINMIND_LIMIT" in error_text:
+                return "rate_limited", error_text
+            return "failed", sid
+        except Exception:
+            return "failed", sid
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        for _ in range(min(3, len(financial_targets))):
+            row_data = next(financial_iter, None)
+            if row_data is None:
+                break
+            financial_pending[executor.submit(fetch_bottom_financial_metrics, row_data)] = str(
+                row_data["stock_id"]
+            )
+
+        while financial_pending:
+            done, _not_done = wait(list(financial_pending.keys()), return_when=FIRST_COMPLETED)
+            for future in done:
+                sid = financial_pending.pop(future, "")
+                status, payload = future.result()
+                financial_done += 1
+                if status == "ok":
+                    financial_rows.append(payload)
+                elif status == "rate_limited":
+                    financial_rate_limit = str(payload)
+                else:
+                    financial_failed.append(str(payload or sid))
+
+                progress.progress(
+                    88 + int(8 * financial_done / max(len(financial_targets), 1)),
+                    text=f"計算連三年平均淨利率：{financial_done} / {len(financial_targets)} 檔...",
+                )
+                if financial_rate_limit:
+                    break
+
+                row_data = next(financial_iter, None)
+                if row_data is not None:
+                    financial_pending[executor.submit(fetch_bottom_financial_metrics, row_data)] = str(
+                        row_data["stock_id"]
+                    )
+
+            if financial_rate_limit:
+                for future in financial_pending:
+                    future.cancel()
+                break
+
+    completed_ids = {str(row["stock_id"]) for row in financial_rows}
+    for sid in df_result["stock_id"].astype(str).drop_duplicates():
+        if sid not in completed_ids:
+            financial_rows.append(
+                {
+                    "stock_id": sid,
+                    "net_margin_data_status": "insufficient",
+                    "net_margin_declining_3y": pd.NA,
+                    "net_margin_summary": "資料不足",
+                    "net_margin_years": "",
+                }
+            )
+
+    if financial_rate_limit:
+        retry_seconds = parse_finmind_retry_seconds(financial_rate_limit)
+        data_diagnostics.append(
+            make_finmind_diagnostic(
+                "FinMind 連三年平均淨利率",
+                parse_finmind_limit_status(financial_rate_limit),
+                financial_rate_limit,
+                records=len(completed_ids),
+                retry_after=retry_seconds,
+                sample_ids=financial_failed[:10],
+            )
+        )
+        st.warning("平均淨利率查詢途中受限；未完成股票標成待確認，不會直接排除。")
+    elif financial_failed:
+        data_diagnostics.append(
+            make_finmind_diagnostic(
+                "FinMind 連三年平均淨利率",
+                None,
+                "部分股票無法取得完整財報。",
+                records=len(completed_ids),
+                sample_ids=financial_failed[:10],
+            )
+        )
+    else:
+        data_diagnostics.append(
+            make_finmind_diagnostic(
+                "FinMind 連三年平均淨利率",
+                200,
+                "",
+                records=len(completed_ids),
+            )
+        )
+
+    financial_audit_df = pd.DataFrame(financial_rows)
+    shadow_audit_df = industry_audit_df.merge(financial_audit_df, on="stock_id", how="outer")
+    shadow_audit_df = apply_shadow_quality_rules(shadow_audit_df)
+    df_result = attach_bottom_shadow_audit(df_result, shadow_audit_df)
+    df_result = df_result.sort_values(
+        ["close", "rebound_pct"], ascending=[False, True]
+    ).reset_index(drop=True)
+
 # ─────────────────────────────────────────────
 # Step 6：估值篩選已移除
 # ─────────────────────────────────────────────
@@ -833,10 +1189,21 @@ else:
     )
     st.caption("以下為已成功計算近半年支撐價的股票，包含未通過起漲幅條件者。")
     st.dataframe(_diag, use_container_width=True, hide_index=True)
-    st.caption("資料來源：股價來自 TWSE + TPEX OpenAPI；月營收來自 MOPS；歷史股價來自 FinMind TaiwanStockPrice。")
+    st.caption(
+        "資料來源：股價來自 TWSE + TPEX OpenAPI；月營收來自 MOPS；歷史股價來自 FinMind TaiwanStockPrice；"
+        "產業別來自 FinMind TaiwanStockInfo；連三年平均淨利率來自 FinMind TaiwanStockFinancialStatements。"
+    )
 
 csv = dataframe_to_csv_bytes(display_df)
 st.download_button(
     "⬇️ 下載 CSV（Excel 可直接開啟）", csv,
     f"底部剛起漲選股_{taipei_now().strftime('%Y%m%d')}.csv", "text/csv",
+)
+
+st.subheader("🧪 影子規則比較")
+render_bottom_shadow_comparison(
+    df_result,
+    rev_growth_min,
+    rebound_max,
+    taipei_now().strftime("%Y%m%d"),
 )

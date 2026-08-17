@@ -2,10 +2,18 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import time
 
 import pandas as pd
 import streamlit as st
 
+from data_layer.finmind_api import (
+    fetch_finmind_result,
+    get_result_message,
+    get_retry_after,
+    get_status_code,
+    is_rate_limited,
+)
 from data_layer.historical_price_service import clean_price_history, fetch_cached_finmind_price_history
 from data_layer.market_api import fetch_json_tpex as fetch_json_tpex_base
 from data_layer.mops_revenue import fetch_mops_recent_revenue_frame
@@ -24,6 +32,60 @@ def fetch_tpex_price_rows(url: str = URL_TPEX_PRICE) -> list:
 def fetch_screener_mops_revenue(latest_ym: str, months: int, cache_version: str = "") -> pd.DataFrame:
     _ = cache_version
     return fetch_mops_recent_revenue_frame(latest_ym, months=months)
+
+
+def _finmind_frame_or_raise(result: dict) -> pd.DataFrame:
+    status_code = get_status_code(result)
+    message = get_result_message(result)
+    retry_after = get_retry_after(result)
+    if is_rate_limited(result):
+        raise RuntimeError(f"FINMIND_LIMIT:{status_code}:{retry_after}:{message}")
+    if status_code != 200 or not result.get("data"):
+        return pd.DataFrame()
+    return pd.DataFrame(result["data"])
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_screener_stock_info(token: str = "") -> pd.DataFrame:
+    params = {"dataset": "TaiwanStockInfo"}
+    if token:
+        params["token"] = token
+    df = _finmind_frame_or_raise(fetch_finmind_result(params, timeout=30))
+    required = {"stock_id", "stock_name", "industry_category", "type"}
+    if df.empty or not required.issubset(df.columns):
+        return pd.DataFrame(columns=sorted(required))
+    result = df[list(required)].copy()
+    result["stock_id"] = result["stock_id"].astype(str).str.strip()
+    result = result[result["stock_id"].str.fullmatch(r"\d{4}", na=False)]
+    return result.drop_duplicates("stock_id").reset_index(drop=True)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_screener_financial_statements(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+    token: str = "",
+    sleep_seconds: float = 2.0,
+) -> pd.DataFrame:
+    params = {
+        "dataset": "TaiwanStockFinancialStatements",
+        "data_id": str(symbol).strip(),
+        "start_date": str(start_date),
+        "end_date": str(end_date),
+    }
+    if token:
+        params["token"] = token
+    if sleep_seconds > 0:
+        time.sleep(sleep_seconds)
+    df = _finmind_frame_or_raise(fetch_finmind_result(params, timeout=30))
+    required = {"date", "type", "value"}
+    if df.empty or not required.issubset(df.columns):
+        return pd.DataFrame(columns=sorted(required))
+    result = df.copy()
+    result["date"] = pd.to_datetime(result["date"], errors="coerce")
+    result["value"] = pd.to_numeric(result["value"], errors="coerce")
+    return result.dropna(subset=["date", "type", "value"]).sort_values("date").reset_index(drop=True)
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
