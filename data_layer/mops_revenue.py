@@ -364,6 +364,12 @@ def fetch_mops_recent_revenue_frame(latest_ym: str | None = None, months: int = 
     skipped_empty_months: list[str] = []
     errors: list[str] = []
     target_months = max(int(months), 1)
+    # Keep one additional non-empty month in the returned frame while still
+    # requiring the requested number of complete months. Downstream consumers
+    # select the newest rows per stock, so the extra month lets a stock missing
+    # from the latest publication fall back without discarding that publication
+    # for stocks that already reported.
+    required_scanned_months = target_months + 1
     max_scan_months = target_months + 6
 
     for _ in range(max_scan_months):
@@ -380,7 +386,10 @@ def fetch_mops_recent_revenue_frame(latest_ym: str | None = None, months: int = 
                 for month_ym, month_frame in scanned_month_frames
                 if len(month_frame) >= min_complete_rows
             ]
-            if len(complete_months) >= target_months:
+            if (
+                len(complete_months) >= target_months
+                and len(scanned_month_frames) >= required_scanned_months
+            ):
                 break
         else:
             skipped_empty_months.append(ym)
