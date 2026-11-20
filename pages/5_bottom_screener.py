@@ -134,7 +134,9 @@ def build_alert_flags(result_df: pd.DataFrame, rev_growth_floor: float, rebound_
         latest_hist_vol_lot = pd.to_numeric(row.get("latest_hist_vol_lot"), errors="coerce")
         avg_vol_20 = pd.to_numeric(row.get("avg_vol_20"), errors="coerce")
 
-        if pd.notna(rebound_pct) and rebound_pct <= 3:
+        if pd.notna(rebound_pct) and rebound_pct < 0:
+            flags.append("跌破支撐")
+        elif pd.notna(rebound_pct) and rebound_pct <= 3:
             flags.append("貼近支撐")
         elif pd.notna(rebound_pct) and rebound_pct <= 8:
             flags.append("起漲初段")
@@ -160,7 +162,7 @@ def build_alert_flags(result_df: pd.DataFrame, rev_growth_floor: float, rebound_
 
 
 def render_alert_summary(display_df: pd.DataFrame) -> None:
-    render_screener_alert_summary(display_df, ["貼近支撐", "起漲初段", "空間縮小", "營收轉弱", "反彈無量"])
+    render_screener_alert_summary(display_df, ["跌破支撐", "貼近支撐", "起漲初段", "空間縮小", "營收轉弱", "反彈無量"])
 
 
 def render_bottom_tag_explainer(
@@ -178,11 +180,12 @@ def render_bottom_tag_explainer(
 - 先通過主條件後才會進入候選或結果：
   - 股價 `> {price_min:.0f}`、成交量 `>= {int(vol_min):,}`、單月營收年增 `> {rev_growth_min:.0f}%`
   - 支撐價以近約 `{support_months}` 個月資料計算（程式使用最近60交易日 low 的 15% 分位）
-  - 結果名單再限制：`自底部漲幅` 需在 `0% ~ {rebound_max:.0f}%`
+  - 結果名單再限制：`自底部漲幅 <= {rebound_max:.0f}%`；允許負值，代表現價已跌破支撐
 
 | 標記 | 觸發條件（對應程式） |
 |---|---|
-| 貼近支撐 | `rebound_pct <= 3` |
+| 跌破支撐 | `rebound_pct < 0` |
+| 貼近支撐 | `0 <= rebound_pct <= 3` |
 | 起漲初段 | `3 < rebound_pct <= 8` |
 | 空間縮小 | `rebound_pct >= max(反彈上限-3, 反彈上限×0.8)` |
 | 營收轉弱 | `rev_yoy < max(營收門檻+5, 10)` |
@@ -931,7 +934,7 @@ df_support = df_support.sort_values(
 ).reset_index(drop=True)
 
 df_result = df_support[
-    (df_support["rebound_pct"] >= 0) & (df_support["rebound_pct"] <= rebound_max)
+    df_support["rebound_pct"] <= rebound_max
 ].copy()
 df_result = df_result.sort_values(
     ["close", "rebound_pct"], ascending=[False, True]
